@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "A2Tools DPS Meter",
+  "productName": "targetcard",
   "version": "2.0.77",
   "identifier": "com.a2tools.dps-meter",
   "build": {
@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "A2Tools DPS Meter",
+        "title": "targetcard",
         "width": 400,
         "height": 300,
         "decorations": false,
@@ -48,12 +48,16 @@
         "frame-src": "http://a2plugin.localhost a2plugin://localhost",
         "form-action": "'none'"
       },
-      "dangerousDisableAssetCspModification": ["style-src"]
+      "dangerousDisableAssetCspModification": [
+        "style-src"
+      ]
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["msi"],
+    "targets": [
+      "msi"
+    ],
     "resources": [
       "../src/data"
     ],

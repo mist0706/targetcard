@@ -2293,6 +2293,11 @@ impl DataStorage {
         self.inner.read().summon_storage.clone()
     }
 
+    /// Map of player id to class, for the class line on a card.
+    pub fn get_actor_jobs(&self) -> HashMap<i32, JobClass> {
+        self.inner.read().actor_jobs.clone()
+    }
+
     pub fn get_known_player_ids(&self) -> HashSet<i32> {
         self.inner.read().known_player_ids.clone()
     }
