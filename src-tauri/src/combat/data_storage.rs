@@ -2298,6 +2298,13 @@ impl DataStorage {
         self.inner.read().actor_jobs.clone()
     }
 
+    /// Ids whose nickname came from an authoritative source (a `44/45 36` player
+    /// identity record). Player characters only, which is what the target card
+    /// uses to tell a player from a mob.
+    pub fn get_authoritative_name_ids(&self) -> HashSet<i32> {
+        self.inner.read().authoritative_name_ids.clone()
+    }
+
     pub fn get_known_player_ids(&self) -> HashSet<i32> {
         self.inner.read().known_player_ids.clone()
     }

@@ -423,6 +423,30 @@ fn details_reader(state: &AppState) -> DpsCalculator {
         state.npc_lookup.clone(), state.ping_tracker.clone())
 }
 
+/// The target card asks this once a second: every player it can see, and which
+/// one to show. Cheap (a few map clones), so it runs on the caller's thread.
+#[tauri::command]
+async fn targetcard_snapshot(
+    app: tauri::AppHandle,
+) -> Result<crate::targetcard::snapshot::TargetSnapshot, String> {
+    Ok(crate::targetcard::snapshot::snapshot(
+        &app.state::<AppState>().data_storage,
+    ))
+}
+
+/// Gear score for one character. Cached for six hours, so polling the card does
+/// not turn into polling NC.
+#[tauri::command]
+async fn targetcard_score(
+    app: tauri::AppHandle,
+    name: String,
+    server: String,
+) -> Result<Option<crate::targetcard::score::GearScore>, String> {
+    let state = app.state::<crate::targetcard::score_service::ScoreServiceState>();
+    let mut service = state.0.lock().await;
+    Ok(service.lookup(&name, &server).await)
+}
+
 #[tauri::command]
 async fn get_dps_snapshot(app: tauri::AppHandle) -> Result<DpsData, String> {
     crate::blocking::CALCULATIONS.run(move || {
@@ -2067,7 +2091,7 @@ const DETAILS_USER_PLACED_KEY: &str = "window.details.userPlaced";
 /// left. Per-fight windows (details-*) are deliberately absent: they are
 /// opened to be read and closed, and keying geometry by fight id would grow
 /// settings without bound.
-const TOOL_WINDOWS: [&str; 3] = ["details", "settings", "history"];
+const TOOL_WINDOWS: [&str; 4] = ["details", "settings", "history", "targetcard"];
 
 /// Settings, History and Details are on top of the overlay (always on top
 /// itself), or they could not be reached over it while the game is in front.
@@ -3362,6 +3386,14 @@ pub fn run() {
 
             app.manage(state);
 
+            // The target card's gear-score lookups: one HTTP client and a cache
+            // file in the app data dir, shared through Tauri state.
+            app.manage(crate::targetcard::score_service::ScoreServiceState(
+                tokio::sync::Mutex::new(crate::targetcard::score_service::ScoreService::new(
+                    &app_data_dir,
+                )),
+            ));
+
             // On KDE, a KWin rule keeps the meter above a borderless game
             // (see platform::kwin_rules). Checked at every start and put back
             // if it is missing: without it the meter sits behind the game, and
@@ -3901,6 +3933,8 @@ pub fn run() {
             crate::plugins::plugin_abyss_siege,
             crate::plugins::plugin_storage_set,
             get_dps_snapshot,
+            targetcard_snapshot,
+            targetcard_score,
             get_skill_details,
             get_details_context,
             get_fight_buffs,

@@ -14,16 +14,23 @@ this player, and how geared are they":
    existing `DataStorage` snapshots: `PlayerCard { entity_id, name, class,
    is_self }`, `build_cards()`, `focus_card()`. No I/O, no UI, and deliberately
    inside the parser core so the wasm purity check keeps covering it.
-2. `src-tauri/src/targetcard/snapshot.rs` — a `TargetSnapshot` and the
-   `targetcard_snapshot` command.
-3. `src-tauri/src/targetcard/score*.rs` — gear score lookup and cache. The
-   parser-side parse function is pure; the `reqwest` client is gated behind the
-   `desktop` feature.
-4. `public/targetcard.html` plus `public/src/js/targetcard.*` — a small
-   always-on-top card window.
-5. Single-line hooks in `src-tauri/src/lib.rs`, `src-tauri/src/app.rs`,
-   `src-tauri/src/combat/data_storage.rs` (`get_actor_jobs`) and
-   `src-tauri/tauri.conf.json` (`productName` and window title, nothing else).
+2. `src-tauri/src/targetcard/snapshot.rs` — `TargetSnapshot` and the `targetcard_snapshot`
+   command. Player set = authoritative `44/45 36` identity records (union) confirmed
+   player actors, so a nearby player who has not fought still gets a card and a mob
+   never does.
+3. `src-tauri/src/targetcard/score.rs` — pure URL building, the EU server-id table,
+   and `parse_score()` for NC's `/api/character/info`. Gear score is the `statList`
+   entry with `type == "ItemLevel"`; the display name is localised, so matching on
+   `name` misses it. Combat power is `profile.combatPower`.
+   `score_service.rs` (desktop only) adds the `reqwest` client, a six-hour on-disk
+   cache, and `targetcard_score`.
+4. `public/targetcard.html` plus `public/src/js/targetcard.{js,css}` — a small
+   always-on-top card window, 260x104, dragging via `data-tauri-drag-region`,
+   polling the snapshot once a second and looking each name up once.
+5. `app.rs` hooks: the two commands in `invoke_handler`, `ScoreServiceState` in
+   managed state, and `"targetcard"` added to `TOOL_WINDOWS` so the card hides with
+   the meter, keeps above the game while the game is in front, and remembers where
+   it was dragged.
 6. `package.json` name, so a built binary is not mistaken for an official release.
 
 `identifier` in `tauri.conf.json` is deliberately left at `com.a2tools.dps-meter`:

@@ -18,12 +18,40 @@
 //! Unknown character: HTTP 404 `resource.not_found`. Missing `region`/`localeInfo`
 //! on the search endpoint: HTTP 400 `InvalidSearchParamException`.
 //!
-//! Pure: no I/O, so it stays inside the parser core and under the wasm check.
+//! Everything here is pure: URL building, the server table and response parsing.
+//! The HTTP client and the cache live in `score_service.rs`, which is desktop-only,
+//! so this file stays inside the parser core and under the wasm check.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+pub const SEARCH_BASE: &str = "https://api-search.plaync.com/aion2global/search/v2/character";
+pub const INFO_BASE: &str = "https://aion2.plaync.com/api/character/info";
+pub const REFERER: &str = "https://aion2.plaync.com/en-us";
+pub const ORIGIN: &str = "https://aion2.plaync.com";
+pub const LANG: &str = "en-US";
+pub const REGION_EU: &str = "eu";
+
+/// EU server ids, derived empirically from the search endpoint on 2026-10-24.
+/// Elyos occupy 13xx and Asmodian 23xx. The numbering is not guessable, so a new
+/// region has to be derived the same way: search a broad keyword and collect the
+/// distinct `serverId`/`serverName` pairs.
+pub const EU_SERVERS: &[(&str, u16)] = &[
+    ("Siel", 1301), ("Nezekan", 1302), ("Vaizel", 1303), ("Kaisinel", 1304),
+    ("Yustiel", 1305), ("Ariel", 1306), ("Fregion", 1307), ("Meslamtaeda", 1308),
+    ("Hithanya", 1309), ("Nania", 1310), ("Tahavatha", 1311), ("Luteros", 1312),
+    ("Phernos", 1313), ("Daminu", 1314), ("Kasaka", 1315), ("Bakarma", 1316),
+    ("Tsenka", 1317), ("Kochi", 1318), ("Ishtar", 1319), ("Tiamat", 1320),
+    ("Gauss", 1321), ("Lamuatan", 1322), ("Nathara", 1323),
+    ("Israphel", 2301), ("Zikel", 2302), ("Triniel", 2303), ("Lumiel", 2304),
+    ("Marchutan", 2305), ("Azphel", 2306), ("Ereshkigal", 2307), ("Beritra", 2308),
+    ("Nemon", 2309), ("Hadala", 2310), ("Ludra", 2311), ("Ulgorn", 2312),
+    ("Munin", 2313), ("Odar", 2314), ("Zemurru", 2315), ("Kromede", 2316),
+    ("Quai", 2317), ("Baba", 2318), ("Fafnir", 2319), ("Indnath", 2320),
+    ("Agnita", 2321), ("Atiel", 2322), ("Tassin", 2323),
+];
 
 /// What a card shows about one character.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GearScore {
     pub name: String,
     pub server: String,
@@ -31,6 +59,79 @@ pub struct GearScore {
     pub level: Option<u32>,
     pub item_level: Option<u32>,
     pub combat_power: Option<i64>,
+}
+
+/// Server id for a server name, case-insensitively.
+pub fn server_id(name: &str) -> Option<u16> {
+    EU_SERVERS
+        .iter()
+        .find(|(server, _)| server.eq_ignore_ascii_case(name.trim()))
+        .map(|(_, id)| *id)
+}
+
+/// Server name for an id, as the game reports it in its own identity records.
+/// Returns `None` for ids outside the table, so callers can fall back.
+pub fn server_name_for_id(id: u16) -> Option<&'static str> {
+    EU_SERVERS.iter().find(|(_, sid)| *sid == id).map(|(name, _)| *name)
+}
+
+/// `%XX`-encode everything outside the RFC 3986 unreserved set.
+pub fn encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.as_bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char)
+            }
+            other => out.push_str(&format!("%{other:02X}")),
+        }
+    }
+    out
+}
+
+/// Undo `%XX` encoding. Invalid escapes pass through unchanged, which is what we
+/// want for the `characterId` values the search endpoint returns: they arrive
+/// already encoded, and a stray `%` should not lose the rest of the id.
+pub fn decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("");
+            if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                out.push(byte);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// The search endpoint wraps the matched substring in `<strong>` tags.
+pub fn strip_tags(value: &str) -> String {
+    value.replace("<strong>", "").replace("</strong>", "").trim().to_string()
+}
+
+pub fn search_url(keyword: &str, server_id: Option<u16>) -> String {
+    let mut url = format!(
+        "{SEARCH_BASE}?keyword={}&page=1&size=20&localeInfo={LANG}&region={REGION_EU}",
+        encode(keyword)
+    );
+    if let Some(id) = server_id {
+        url.push_str(&format!("&serverId={id}"));
+    }
+    url
+}
+
+pub fn info_url(character_id: &str, server_id: u16) -> String {
+    format!(
+        "{INFO_BASE}?lang={LANG}&characterId={}&serverId={server_id}&region={REGION_EU}",
+        encode(character_id)
+    )
 }
 
 /// Pull a score out of a `/api/character/info` response.
@@ -135,5 +236,42 @@ mod tests {
         let score = parse_score(&payload).unwrap();
         assert_eq!(score.item_level, Some(1));
         assert_eq!(score.combat_power, Some(2882));
+    }
+
+    #[test]
+    fn server_table_round_trips() {
+        assert_eq!(server_id("Phernos"), Some(1313));
+        assert_eq!(server_id("phernos"), Some(1313));
+        assert_eq!(server_id("  Munin "), Some(2313));
+        assert_eq!(server_id("Nowhere"), None);
+        assert_eq!(server_name_for_id(1313), Some("Phernos"));
+        assert_eq!(server_name_for_id(9), None);
+    }
+
+    #[test]
+    fn urls_carry_the_required_parameters() {
+        let search = search_url("Sin s", Some(1313));
+        assert!(search.contains("keyword=Sin%20s"), "{search}");
+        assert!(search.contains("region=eu"), "{search}");
+        assert!(search.contains("localeInfo=en-US"), "{search}");
+        assert!(search.contains("serverId=1313"), "{search}");
+
+        let info = info_url("tMf1G5JFEh2Qy9U5BXofyxXsFPz28DSR2au5MkolSZ4=", 1313);
+        assert!(info.contains("serverId=1313"), "{info}");
+        assert!(info.contains("%3D"), "the trailing = must be encoded: {info}");
+        assert!(!info.contains("SZ4="), "raw = must not survive: {info}");
+    }
+
+    #[test]
+    fn character_ids_round_trip_through_encoding() {
+        let raw = "tMf1G5JFEh2Qy9U5BXofyxXsFPz28DSR2au5MkolSZ4=";
+        assert_eq!(decode(&encode(raw)), raw);
+        assert_eq!(decode(&encode("a+b/c==")), "a+b/c==");
+    }
+
+    #[test]
+    fn search_highlight_tags_are_stripped() {
+        assert_eq!(strip_tags("<strong>Sins</strong>"), "Sins");
+        assert_eq!(strip_tags(" tch<strong>sins</strong> "), "tchsins");
     }
 }

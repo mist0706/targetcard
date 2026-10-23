@@ -48,6 +48,10 @@ desktop = [
     "dep:tauri-plugin-single-instance",
     "dep:libloading",
     "dep:tokio",
+    # targetcard: the card looks gear scores up over HTTP, so the desktop build
+    # needs a client even with `online` off. reqwest still links nothing of
+    # upstream's services, which stay behind `online`.
+    "dep:reqwest",
     "dep:tracing-subscriber",
     "dep:flate2",
     "dep:zstd",

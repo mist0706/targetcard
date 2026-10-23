@@ -11,12 +11,18 @@
 
 use std::collections::{HashMap, HashSet};
 
+use serde::Serialize;
+
 use crate::entity::job_class::JobClass;
 
 pub mod score;
+pub mod snapshot;
+
+#[cfg(feature = "desktop")]
+pub mod score_service;
 
 /// One row of the target card.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PlayerCard {
     pub entity_id: i32,
     pub name: String,

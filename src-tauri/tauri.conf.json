@@ -21,6 +21,22 @@
         "alwaysOnTop": true,
         "resizable": true,
         "shadow": false
+      },
+      {
+        "label": "targetcard",
+        "url": "targetcard.html",
+        "title": "targetcard",
+        "width": 260,
+        "height": 104,
+        "x": 40,
+        "y": 160,
+        "resizable": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "focus": false,
+        "shadow": false
       }
     ],
     "security": {
