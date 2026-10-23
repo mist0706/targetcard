@@ -13,6 +13,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::entity::job_class::JobClass;
 
+pub mod score;
+
 /// One row of the target card.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlayerCard {
