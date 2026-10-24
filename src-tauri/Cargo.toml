@@ -88,6 +88,13 @@ name = "a2t-probe"
 path = "tools/a2t_probe.rs"
 required-features = ["desktop"]
 
+# Records the game's traffic to the text format share::read_capture reads, tags
+# the moments a player is clicked, and uploads the bundle (tools/targetcard_record.rs).
+[[bin]]
+name = "targetcard-record"
+path = "tools/targetcard_record.rs"
+required-features = ["desktop"]
+
 [[bin]]
 name = "a2t-roster"
 path = "tools/a2t_roster.rs"

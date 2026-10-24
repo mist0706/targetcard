@@ -1,0 +1,61 @@
+name: record tool
+
+# Builds targetcard-record.exe and publishes it as a release asset, so the
+# recording tool is one download: no Rust, no Python, no zip on the gaming PC.
+#
+# Download (stable URL, republished on every change to the tool or the parser):
+#   https://github.com/mist0706/targetcard/releases/download/record/targetcard-record.exe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src-tauri/tools/targetcard_record.rs"
+      - "src-tauri/src/**"
+      - "src-tauri/Cargo.toml"
+      - ".github/workflows/record.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: build targetcard-record
+        working-directory: src-tauri
+        run: cargo build --release --no-default-features --features desktop --bin targetcard-record
+
+      - name: check it runs
+        run: |
+          src-tauri\target\release\targetcard-record.exe --help
+          if ($LASTEXITCODE -ne 0) { throw "the binary did not even print --help" }
+
+      - name: republish the release
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release delete record --yes --cleanup-tag
+
+      - name: publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create record `
+            "src-tauri/target/release/targetcard-record.exe" `
+            --title "targetcard-record" `
+            --notes "Records the game's traffic to the parser's own capture format, tags the moments you click a player, and uploads the bundle. Needs Npcap (installed with Wireshark). Run from PowerShell: .\targetcard-record.exe --seconds 60 --upload http://10.7.1.235:8791 --token TOKEN"
+
+      - name: summarize
+        run: |
+          $exe = Get-Item "src-tauri/target/release/targetcard-record.exe"
+          "exe: {0:N0} bytes  sha256 {1}" -f $exe.Length, (Get-FileHash $exe.FullName -Algorithm SHA256).Hash |
+            Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
