@@ -40,6 +40,26 @@ pub fn player_ids(storage: &DataStorage) -> HashSet<i32> {
     ids
 }
 
+/// Which card to show.
+///
+/// The meter already tracks a current target from damage events
+/// (`DataStorage::current_target`), so prefer that when it is a known player:
+/// switching to a player and hitting them then moves the card immediately.
+/// Otherwise fall back to the newest named player, which is all we have for a
+/// player who has not been fought yet. The real selection opcode is still
+/// unfound; this is the honest interim.
+pub fn focus_entity(storage: &DataStorage, cards: &[PlayerCard]) -> Option<i32> {
+    let current = storage.current_target();
+    if current != 0
+        && cards
+            .iter()
+            .any(|card| card.entity_id == current && !card.is_self)
+    {
+        return Some(current);
+    }
+    focus_card(cards).map(|card| card.entity_id)
+}
+
 pub fn snapshot(storage: &DataStorage) -> TargetSnapshot {
     let cards = build_cards(
         &storage.get_nicknames(),
@@ -47,7 +67,7 @@ pub fn snapshot(storage: &DataStorage) -> TargetSnapshot {
         &storage.get_actor_jobs(),
         storage.local_player_id(),
     );
-    let focus_entity_id = focus_card(&cards).map(|card| card.entity_id);
+    let focus_entity_id = focus_entity(storage, &cards);
     let server_name = storage
         .local_character_name()
         .map(|name| storage.player_server(&name))
@@ -86,5 +106,33 @@ mod tests {
         let storage = DataStorage::new();
         storage.append_nickname_authoritative(4716, "");
         assert!(snapshot(&storage).players.is_empty());
+    }
+
+    #[test]
+    fn a_combat_target_wins_over_the_newest_name() {
+        let storage = DataStorage::new();
+        storage.append_nickname_authoritative(4715, "Miku");
+        storage.append_nickname_authoritative(4716, "Alpha");
+        // The meter sets this from damage events: whoever you are fighting.
+        storage.set_current_target(4715);
+        assert_eq!(snapshot(&storage).focus_entity_id, Some(4715));
+    }
+
+    #[test]
+    fn without_a_combat_target_the_newest_name_wins() {
+        let storage = DataStorage::new();
+        storage.append_nickname_authoritative(4715, "Miku");
+        storage.append_nickname_authoritative(4716, "Alpha");
+        storage.set_current_target(0);
+        assert_eq!(snapshot(&storage).focus_entity_id, Some(4716));
+    }
+
+    #[test]
+    fn a_combat_target_that_is_not_a_player_is_ignored() {
+        let storage = DataStorage::new();
+        storage.append_nickname_authoritative(4715, "Miku");
+        // A mob id, tracked as a damage target but absent from the card list.
+        storage.set_current_target(9001);
+        assert_eq!(snapshot(&storage).focus_entity_id, Some(4715));
     }
 }
