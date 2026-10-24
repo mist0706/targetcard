@@ -2464,6 +2464,21 @@ impl DataStorage {
         self.inner.read().target_combat.get(&target_id).cloned()
     }
 
+    /// The id among `candidates` with the most recent damage event.
+    ///
+    /// The target card polls once a second and only needs this one answer, so it
+    /// reads the aggregate table under the lock instead of cloning every
+    /// target's combat data.
+    pub fn most_recently_damaged(&self, candidates: &HashSet<i32>) -> Option<i32> {
+        let inner = self.inner.read();
+        inner
+            .target_combat
+            .iter()
+            .filter(|(id, _)| candidates.contains(id))
+            .max_by_key(|(_, target)| target.last_damage_time)
+            .map(|(&id, _)| id)
+    }
+
     /// Like `get_combat_snapshot` but without per-skill `hit_timestamps`.
     /// `hit_timestamps` grows unbounded over a fight and is only needed by
     /// `get_target_details`. The 500ms hot paths (`get_dps`,

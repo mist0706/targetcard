@@ -40,23 +40,31 @@ pub fn player_ids(storage: &DataStorage) -> HashSet<i32> {
     ids
 }
 
-/// Which card to show.
+/// Which card to show, in order of confidence:
 ///
-/// The meter already tracks a current target from damage events
-/// (`DataStorage::current_target`), so prefer that when it is a known player:
-/// switching to a player and hitting them then moves the card immediately.
-/// Otherwise fall back to the newest named player, which is all we have for a
-/// player who has not been fought yet. The real selection opcode is still
-/// unfound; this is the honest interim.
+/// 1. the meter's tracked target, when that target is a player character
+/// 2. the player whose damage event is the most recent, which covers fighting a
+///    player while the meter's own target selection is following a mob
+/// 3. the newest named player, which is all we have for someone who has not
+///    been fought yet
+///
+/// The real selection opcode is still unfound; this is the honest interim.
 pub fn focus_entity(storage: &DataStorage, cards: &[PlayerCard]) -> Option<i32> {
-    let current = storage.current_target();
-    if current != 0
-        && cards
-            .iter()
-            .any(|card| card.entity_id == current && !card.is_self)
-    {
-        return Some(current);
+    let players: HashSet<i32> = cards
+        .iter()
+        .filter(|card| !card.is_self)
+        .map(|card| card.entity_id)
+        .collect();
+
+    let tracked = storage.current_target();
+    if tracked != 0 && players.contains(&tracked) {
+        return Some(tracked);
     }
+
+    if let Some(recent) = storage.most_recently_damaged(&players) {
+        return Some(recent);
+    }
+
     focus_card(cards).map(|card| card.entity_id)
 }
 
@@ -151,6 +159,26 @@ mod tests {
         storage.append_nickname_authoritative(4715, "Miku");
         // A mob id, tracked as a damage target but absent from the card list.
         storage.set_current_target(9001);
+        assert_eq!(snapshot(&storage).focus_entity_id, Some(4715));
+    }
+
+    #[test]
+    fn a_player_you_fought_wins_over_a_newer_name() {
+        use crate::entity::damage_packet::ParsedDamagePacket;
+
+        let storage = DataStorage::new();
+        storage.append_nickname_authoritative(4715, "Miku");
+        // The fallback would pick this one: newest id, so most recently named.
+        storage.append_nickname_authoritative(4716, "Alpha");
+
+        let mut hit = ParsedDamagePacket::new();
+        hit.set_actor_id(1001);
+        hit.set_target_id(4715);
+        hit.set_damage(1200);
+        hit.set_skill_code(200101);
+        storage.append_damage(hit);
+        storage.set_current_target(0); // the meter is tracking a mob, not a player
+
         assert_eq!(snapshot(&storage).focus_entity_id, Some(4715));
     }
 
