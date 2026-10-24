@@ -177,12 +177,22 @@ function Get-SourceArchive {
     Write-Step "Source download"
     Write-Ok ("repo: $Repo   ref: $Ref")
 
+    # Resolve the ref to a commit SHA. api.github.com is CDN-cached and can serve
+    # a commit that is a minute stale, which is exactly the confusion this script
+    # exists to end: ask git first (authoritative), and cache-bust the API.
     $sha = $null; $when = ""; $subject = ""
+    if ((Get-Command git -ErrorAction SilentlyContinue) -and ($Ref -notmatch '^[0-9a-f]{7,40}$')) {
+        try {
+            $line = & git ls-remote "https://github.com/$Repo" $Ref 2>$null | Select-Object -First 1
+            if ($line) { $sha = ($line -split '\s+')[0] }
+        } catch { }
+    }
+    $apiUrl = if ($sha) { "https://api.github.com/repos/$Repo/commits/$sha" }
+              else      { "https://api.github.com/repos/$Repo/commits/" + $Ref + "?cb=" + [guid]::NewGuid().ToString("N") }
     try {
-        $commit = Invoke-RestMethod -UseBasicParsing -TimeoutSec 30 `
-            -Uri "https://api.github.com/repos/$Repo/commits/$Ref" `
+        $commit = Invoke-RestMethod -UseBasicParsing -TimeoutSec 30 -Uri $apiUrl `
             -Headers @{ "User-Agent" = "targetcard-build"; "Accept" = "application/vnd.github+json" }
-        $sha = $commit.sha
+        if (-not $sha) { $sha = $commit.sha }
         $when = ([datetime]$commit.commit.author.date).ToLocalTime().ToString("yyyy-MM-dd HH:mm")
         $subject = ($commit.commit.message -split "`n")[0]
     } catch {
