@@ -39,14 +39,18 @@
     const className = player.class || score?.class_name || "";
     el("tc-class").textContent = className;
 
-    const level = score?.level;
+    // The roster (party members) states level, gear score and combat power
+    // outright, so prefer it and skip the web lookup entirely for those.
+    const level = player.level ?? score?.level;
     el("tc-level").textContent = level ? `Lv ${level}` : "";
 
+    const gear = player.gear_score ?? score?.item_level;
+    const power = player.combat_power ?? score?.combat_power;
     const gs = el("tc-gs");
-    if (score && (score.item_level || score.combat_power)) {
-      gs.textContent = score.item_level ? `GS ${score.item_level}` : "GS ?";
+    if (gear || power) {
+      gs.textContent = gear ? `GS ${gear}` : "GS ?";
       gs.classList.remove("is-pending");
-      el("tc-cp").textContent = fmtPower(score.combat_power);
+      el("tc-cp").textContent = fmtPower(power);
       el("tc-hint").textContent = "";
     } else {
       gs.textContent = "GS ...";
@@ -92,7 +96,7 @@
       const score = scores.get(key) || null;
       render(player, score);
 
-      if (!score && !misses.has(key) && lookingUp !== key) {
+      if (player.gear_score == null && !score && !misses.has(key) && lookingUp !== key) {
         // Fire and forget: the next tick renders whatever came back.
         lookup(player, server);
         render(player, null);

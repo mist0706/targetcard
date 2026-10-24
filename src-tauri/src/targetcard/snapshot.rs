@@ -61,12 +61,30 @@ pub fn focus_entity(storage: &DataStorage, cards: &[PlayerCard]) -> Option<i32> 
 }
 
 pub fn snapshot(storage: &DataStorage) -> TargetSnapshot {
-    let cards = build_cards(
+    let party = storage.get_party_members();
+    // The party roster states each member's level, gear score and combat power,
+    // so a party member's card is complete with no web lookup at all. Anything
+    // the roster does not cover keeps the fields empty and the page falls back
+    // to NC's character API.
+    let cards: Vec<PlayerCard> = build_cards(
         &storage.get_nicknames(),
         &player_ids(storage),
         &storage.get_actor_jobs(),
         storage.local_player_id(),
-    );
+    )
+    .into_iter()
+    .map(|mut card| {
+        if let Some(member) = party.get(&card.name) {
+            card.level = Some(member.level.max(0) as u32);
+            card.gear_score = (member.gear_score > 0).then_some(member.gear_score);
+            card.combat_power = (member.combat_power > 0).then_some(member.combat_power);
+            if card.class.is_none() {
+                card.class = member.job;
+            }
+        }
+        card
+    })
+    .collect();
     let focus_entity_id = focus_entity(storage, &cards);
     let server_name = storage
         .local_character_name()
@@ -134,5 +152,40 @@ mod tests {
         // A mob id, tracked as a damage target but absent from the card list.
         storage.set_current_target(9001);
         assert_eq!(snapshot(&storage).focus_entity_id, Some(4715));
+    }
+
+    #[test]
+    fn the_party_roster_fills_level_gear_and_power() {
+        use crate::combat::data_storage::PartyMember;
+
+        let storage = DataStorage::new();
+        storage.append_nickname_authoritative(4715, "Miku");
+        storage.set_party_roster(
+            vec![(
+                "Miku".to_string(),
+                PartyMember {
+                    slot: 1,
+                    level: 45,
+                    gear_score: 1611,
+                    combat_power: 79_658,
+                    ..Default::default()
+                },
+            )],
+            true,
+        );
+
+        let card = &snapshot(&storage).players[0];
+        assert_eq!(card.level, Some(45));
+        assert_eq!(card.gear_score, Some(1611));
+        assert_eq!(card.combat_power, Some(79_658));
+    }
+
+    #[test]
+    fn a_stranger_outside_the_roster_keeps_empty_score_fields() {
+        let storage = DataStorage::new();
+        storage.append_nickname_authoritative(4715, "Miku");
+        let card = &snapshot(&storage).players[0];
+        assert_eq!(card.gear_score, None);
+        assert_eq!(card.combat_power, None);
     }
 }

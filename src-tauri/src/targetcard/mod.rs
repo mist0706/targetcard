@@ -28,6 +28,11 @@ pub struct PlayerCard {
     pub name: String,
     pub class: Option<JobClass>,
     pub is_self: bool,
+    /// Filled in from the party roster when the game states it, so a party
+    /// member's card needs no web lookup at all.
+    pub level: Option<u32>,
+    pub gear_score: Option<i32>,
+    pub combat_power: Option<i64>,
 }
 
 /// Build the card list for every known player character.
@@ -57,6 +62,9 @@ pub fn build_cards(
                 name,
                 class: jobs.get(&id).copied(),
                 is_self: self_id == Some(id),
+                level: None,
+                gear_score: None,
+                combat_power: None,
             })
         })
         .collect();
