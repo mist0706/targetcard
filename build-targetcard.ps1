@@ -1,0 +1,357 @@
+<#
+.SYNOPSIS
+    Build the targetcard MSI on Windows: download the latest source from GitHub,
+    install the toolchain if needed, run the offline Tauri build.
+
+.DESCRIPTION
+    Run from an Administrator PowerShell. Everything it installs is a normal
+    developer tool: Rust (rustup), Visual Studio Build Tools with the C++
+    workload, Node LTS, and the WebView2 runtime. Nothing touches the game.
+
+    No zip to keep track of. By default the script asks GitHub for the latest
+    commit on the fork, downloads exactly that commit's archive, and prints the
+    commit, the version and the archive hash BEFORE it starts compiling, so a
+    stale or wrong source can never be mistaken for a successful build.
+
+    Safe to re-run: each install step checks first, and -BuildOnly skips the
+    installs once the toolchain is present. Your build output in
+    src-tauri\target survives a source refresh.
+
+    Disk: plan for about 8 GB free (VS Build Tools ~4 GB, cargo target ~2 GB,
+    node_modules ~0.5 GB).
+
+.PARAMETER Repo
+    GitHub repository to build from. Default: mist0706/targetcard.
+
+.PARAMETER Ref
+    Branch, tag or commit to build. Default: main.
+
+.PARAMETER ZipPath
+    Build from a local source archive instead of downloading. Escape hatch for
+    offline machines and for testing an unmerged change.
+
+.PARAMETER WorkDir
+    Where the source is unpacked and built. Keep it short; Tauri paths get long.
+
+.PARAMETER SetupOnly
+    Install the toolchain and stop before building.
+
+.PARAMETER BuildOnly
+    Build without checking or installing anything.
+
+.PARAMETER Force
+    Re-unpack the source even if WorkDir already exists (your build output in
+    src-tauri\target is preserved).
+#>
+[CmdletBinding()]
+param(
+    [string]$Repo = "mist0706/targetcard",
+    [string]$Ref = "main",
+    [string]$ZipPath,
+    [string]$WorkDir = "C:\targetcard",
+    [switch]$SetupOnly,
+    [switch]$BuildOnly,
+    [switch]$Force
+)
+
+$ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"      # speeds up Invoke-WebRequest a lot
+# Windows PowerShell 5.1 still negotiates TLS 1.0 by default and GitHub refuses it.
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch { }
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+function Write-Step([string]$Text) { Write-Host "`n== $Text ==" -ForegroundColor Cyan }
+function Write-Ok([string]$Text)   { Write-Host "   $Text" -ForegroundColor Green }
+function Write-Warn2([string]$Text){ Write-Host "   $Text" -ForegroundColor Yellow }
+
+function Assert-Admin {
+    $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($id)
+    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        throw "Run this from an Administrator PowerShell (right-click > Run as administrator)."
+    }
+}
+
+function Update-SessionPath {
+    # Pick up tools installed during this session without restarting the shell.
+    $machine = [Environment]::GetEnvironmentVariable("Path", "Machine")
+    $user = [Environment]::GetEnvironmentVariable("Path", "User")
+    $env:Path = "$machine;$user"
+    $cargo = Join-Path $env:USERPROFILE ".cargo\bin"
+    if ((Test-Path $cargo) -and ($env:Path -notlike "*$cargo*")) { $env:Path = "$cargo;$env:Path" }
+}
+
+function Test-Cargo {
+    Update-SessionPath
+    $exe = Join-Path $env:USERPROFILE ".cargo\bin\cargo.exe"
+    if (Test-Path $exe) { return $true }
+    return [bool](Get-Command cargo -ErrorAction SilentlyContinue)
+}
+
+function Test-VcTools {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+    if (-not (Test-Path $vswhere)) { return $false }
+    $path = & $vswhere -products * -latest `
+        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+        -property installationPath 2>$null
+    return [bool]$path
+}
+
+function Test-Node {
+    Update-SessionPath
+    return [bool](Get-Command node -ErrorAction SilentlyContinue) -and
+           [bool](Get-Command npm -ErrorAction SilentlyContinue)
+}
+
+function Test-WebView2 {
+    foreach ($root in ${env:ProgramFiles(x86)}, $env:ProgramFiles) {
+        if ($root -and (Test-Path (Join-Path $root "Microsoft\EdgeWebView\Application"))) { return $true }
+    }
+    return $false
+}
+
+function Install-WithWinget([string]$Id, [string]$Override) {
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { return $false }
+    Write-Host "   winget install $Id (this can take a while)"
+    $wgArgs = @("install", "--id", $Id, "--exact", "--silent",
+                "--accept-source-agreements", "--accept-package-agreements")
+    if ($Override) { $wgArgs += @("--override", $Override) }
+    & winget @wgArgs
+    Update-SessionPath
+    return $LASTEXITCODE -eq 0
+}
+
+function Install-Rust {
+    Write-Step "Rust toolchain"
+    if (Test-Cargo) { Write-Ok "cargo already present"; return }
+    $rustup = Join-Path $env:TEMP "rustup-init.exe"
+    Write-Host "   downloading rustup-init.exe"
+    Invoke-WebRequest "https://win.rustup.rs/x86_64" -OutFile $rustup -UseBasicParsing
+    & $rustup -y --profile minimal --default-toolchain stable
+    if ($LASTEXITCODE -ne 0) { throw "rustup install failed with exit code $LASTEXITCODE" }
+    Update-SessionPath
+    Write-Ok ("cargo " + (& (Join-Path $env:USERPROFILE ".cargo\bin\cargo.exe") --version))
+}
+
+function Install-VcTools {
+    Write-Step "Visual Studio Build Tools (C++ workload, Windows SDK)"
+    if (Test-VcTools) { Write-Ok "MSVC C++ toolchain already present"; return }
+    $override = "--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+    if (-not (Install-WithWinget "Microsoft.VisualStudio.2022.BuildTools" $override)) {
+        Write-Warn2 "winget unavailable or failed; using the official bootstrapper"
+        $exe = Join-Path $env:TEMP "vs_BuildTools.exe"
+        Invoke-WebRequest "https://aka.ms/vs/17/release/vs_BuildTools.exe" -OutFile $exe -UseBasicParsing
+        Start-Process -FilePath $exe -ArgumentList $override -Wait
+    }
+    if (-not (Test-VcTools)) {
+        throw "MSVC C++ tools still not detected. Open the Visual Studio Installer and add 'Desktop development with C++'."
+    }
+    Write-Ok "MSVC toolchain detected"
+}
+
+function Install-Node {
+    Write-Step "Node.js LTS"
+    if (Test-Node) { Write-Ok ("node " + (& node --version)); return }
+    if (-not (Install-WithWinget "OpenJS.NodeJS.LTS" $null)) {
+        throw "Install Node.js LTS from https://nodejs.org/en/download and re-run this script."
+    }
+    if (-not (Test-Node)) { throw "Node still not on PATH. Close this window, open a new Administrator PowerShell, and re-run." }
+    Write-Ok ("node " + (& node --version))
+}
+
+function Install-WebView2 {
+    Write-Step "WebView2 runtime"
+    if (Test-WebView2) { Write-Ok "already present"; return }
+    if (-not (Install-WithWinget "Microsoft.EdgeWebView2Runtime" $null)) {
+        Write-Warn2 "Falling back to the Evergreen bootstrapper"
+        $exe = Join-Path $env:TEMP "MicrosoftEdgeWebview2Setup.exe"
+        Invoke-WebRequest "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile $exe -UseBasicParsing
+        Start-Process -FilePath $exe -ArgumentList "/silent /install" -Wait
+    }
+    if (Test-WebView2) { Write-Ok "installed" } else { Write-Warn2 "not detected; the app may still run if Edge is installed" }
+}
+
+function Get-SourceArchive {
+    # Download exactly one commit from GitHub. The commit SHA, not a branch name
+    # and not a file date, is the identity of what gets built.
+    Write-Step "Source download"
+    Write-Ok ("repo: $Repo   ref: $Ref")
+
+    $sha = $null; $when = ""; $subject = ""
+    try {
+        $commit = Invoke-RestMethod -UseBasicParsing -TimeoutSec 30 `
+            -Uri "https://api.github.com/repos/$Repo/commits/$Ref" `
+            -Headers @{ "User-Agent" = "targetcard-build"; "Accept" = "application/vnd.github+json" }
+        $sha = $commit.sha
+        $when = ([datetime]$commit.commit.author.date).ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+        $subject = ($commit.commit.message -split "`n")[0]
+    } catch {
+        Write-Warn2 "Could not read commit metadata ($($_.Exception.Message)); downloading the ref archive instead."
+    }
+
+    $url = if ($sha) { "https://codeload.github.com/$Repo/zip/$sha" }
+           else     { "https://codeload.github.com/$Repo/zip/refs/heads/$Ref" }
+    $out = Join-Path $env:TEMP ("targetcard-" + ($(if ($sha) { $sha.Substring(0,8) } else { $Ref -replace '[^\w]','_' })) + ".zip")
+
+    Write-Host "   downloading $url"
+    Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $out -TimeoutSec 300
+    $hash = (Get-FileHash $out -Algorithm SHA256).Hash
+
+    if ($sha)    { Write-Ok ("commit:  " + $sha.Substring(0,12) + "   " + $when) }
+    if ($subject) { Write-Ok ("subject: " + $subject) }
+    Write-Ok ("archive: " + [math]::Round((Get-Item $out).Length / 1KB, 0) + " KB  sha256 " + $hash.Substring(0,16) + "...")
+
+    return [pscustomobject]@{ Path = $out; Sha = $sha; Sha256 = $hash; Subject = $subject; When = $when }
+}
+
+function Show-SourceFingerprint([string]$Zip, $Source) {
+    # Unpack, then state what is actually on disk. This is the last chance to
+    # catch a wrong or stale tree before twenty minutes of compiling.
+    Write-Step "Source check"
+    $hash = (Get-FileHash $Zip -Algorithm SHA256).Hash
+    $cargo = Join-Path $WorkDir "src-tauri\Cargo.toml"
+    $version = "unknown"
+    if (Test-Path $cargo) {
+        $match = Select-String -Path $cargo -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+        if ($match) { $version = $match.Matches[0].Groups[1].Value }
+    }
+    $pkgVersion = "unknown"
+    $pkg = Join-Path $WorkDir "package.json"
+    if (Test-Path $pkg) {
+        $m2 = Select-String -Path $pkg -Pattern '"version"\s*:\s*"([^"]+)"' | Select-Object -First 1
+        if ($m2) { $pkgVersion = $m2.Matches[0].Groups[1].Value }
+    }
+    $cardFiles = @("public\targetcard.html", "src-tauri\src\targetcard\score_service.rs")
+    $missing = @($cardFiles | Where-Object { -not (Test-Path (Join-Path $WorkDir $_)) })
+    $card = if ($missing.Count -eq 0) { "present" } else { "MISSING" }
+
+    Write-Ok ("version:   cargo " + $version + "   npm " + $pkgVersion)
+    Write-Ok ("card code: " + $card)
+    Write-Ok ("archive:   " + $hash.Substring(0, 16) + "...")
+    if ($missing.Count -gt 0) {
+        Write-Warn2 "This source predates the card window ($($missing -join ', '))."
+        Write-Warn2 "Nothing here is worth building. Check the repo and ref."
+    }
+    if ($Source -and $Source.Sha) {
+        $stamp = Join-Path $WorkDir ".last-build-commit"
+        if ((Test-Path $stamp) -and ((Get-Content $stamp -Raw).Trim() -eq $Source.Sha)) {
+            Write-Warn2 "Same commit as your last build. Nothing new upstream."
+        }
+        Set-Content -Path $stamp -Value $Source.Sha -NoNewline
+    }
+    return [pscustomobject]@{ Sha256 = $hash; Version = $version; NpmVersion = $pkgVersion; Card = $card }
+}
+
+function Expand-Source([string]$Zip) {
+    Write-Step "Unpack"
+    if ((Test-Path (Join-Path $WorkDir "package.json")) -and -not $Force) {
+        Write-Ok "$WorkDir already has the source (use -Force to replace it)"
+        return
+    }
+    # Keep the expensive build artefacts across a re-unpack: `src-tauri\target` is
+    # 10-30 minutes of Rust, and node_modules is a few hundred MB of download.
+    $keep = @(
+        @{ Path = (Join-Path $WorkDir "src-tauri\target"); Stash = (Join-Path $env:TEMP "tc-keep-target") },
+        @{ Path = (Join-Path $WorkDir "node_modules");        Stash = (Join-Path $env:TEMP "tc-keep-modules") }
+    )
+    foreach ($item in $keep) {
+        if (Test-Path $item.Stash) { Remove-Item $item.Stash -Recurse -Force -ErrorAction SilentlyContinue }
+        if (Test-Path $item.Path) {
+            Write-Host "   keeping $($item.Path) for the rebuild"
+            Move-Item $item.Path $item.Stash -Force
+        }
+    }
+    if (Test-Path $WorkDir) { Remove-Item $WorkDir -Recurse -Force }
+    New-Item -ItemType Directory -Path $WorkDir | Out-Null
+    Write-Host "   extracting $(Split-Path $Zip -Leaf)"
+    [IO.Compression.ZipFile]::ExtractToDirectory($Zip, $WorkDir)
+    # GitHub archives put everything under one folder: `targetcard-main` or
+    # `targetcard-<sha>`. Flatten it so paths match the docs.
+    if (-not (Test-Path (Join-Path $WorkDir "package.json"))) {
+        $tops = @(Get-ChildItem $WorkDir -Directory)
+        if ($tops.Count -eq 1 -and (Test-Path (Join-Path $tops[0].FullName "package.json"))) {
+            Get-ChildItem $tops[0].FullName -Force | Move-Item -Destination $WorkDir -Force
+            Remove-Item $tops[0].FullName -Recurse -Force
+        }
+    }
+    foreach ($item in $keep) {
+        if (Test-Path $item.Stash) { Move-Item $item.Stash $item.Path -Force }
+    }
+    if (-not (Test-Path (Join-Path $WorkDir "package.json"))) { throw "unexpected archive layout: no package.json in $WorkDir" }
+    Write-Ok "source at $WorkDir"
+}
+
+Assert-Admin
+
+if ($BuildOnly) {
+    if (-not (Test-Cargo))  { throw "-BuildOnly needs cargo on PATH" }
+    if (-not (Test-Node))   { throw "-BuildOnly needs node on PATH" }
+} else {
+    Write-Step "Toolchain check"
+    Write-Host "   cargo:  $(if (Test-Cargo)   {'present'} else {'missing -> install'})"
+    Write-Host "   MSVC:   $(if (Test-VcTools) {'present'} else {'missing -> install'})"
+    Write-Host "   node:   $(if (Test-Node)    {'present'} else {'missing -> install'})"
+    Write-Host "   WebView2: $(if (Test-WebView2) {'present'} else {'missing -> install'})"
+    if (-not (Test-Path "C:\Windows\System32\Npcap") -and -not (Test-Path "C:\Program Files\Wireshark")) {
+        Write-Warn2 "Npcap not found. The app needs it to capture packets: install Wireshark or Npcap first."
+    }
+    Write-Host "`n   Installs can take 30-60 minutes the first time and use ~8 GB." -ForegroundColor Yellow
+    if (-not $PSBoundParameters.ContainsKey("SetupOnly")) {
+        Read-Host "   Press Enter to continue, or Ctrl+C to abort" | Out-Null
+    }
+    Install-Rust
+    Install-VcTools
+    Install-Node
+    Install-WebView2
+    if ($SetupOnly) { Write-Host "`nToolchain ready. Re-run with -BuildOnly to build." -ForegroundColor Green; return }
+}
+
+# Local archive if given, otherwise the latest commit from GitHub.
+if ($ZipPath) {
+    if (-not (Test-Path $ZipPath)) { throw "no such file: $ZipPath" }
+    Write-Step "Source download"
+    Write-Ok ("local archive: " + (Resolve-Path $ZipPath).Path)
+    $source = [pscustomobject]@{ Path = (Resolve-Path $ZipPath).Path; Sha = $null; Sha256 = (Get-FileHash $ZipPath -Algorithm SHA256).Hash }
+} else {
+    $source = Get-SourceArchive
+}
+
+Expand-Source $source.Path
+$fingerprint = Show-SourceFingerprint $source.Path $source
+
+Write-Step "npm ci"
+Push-Location $WorkDir
+try {
+    & npm ci --no-audit --no-fund
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn2 "npm ci failed; trying npm install"
+        & npm install --no-audit --no-fund
+        if ($LASTEXITCODE -ne 0) { throw "npm install failed with exit code $LASTEXITCODE" }
+    }
+    Write-Ok "dependencies installed"
+
+    Write-Step "tauri build (offline: no uploads, no telemetry)"
+    Write-Host "   first build takes 10-30 minutes; Rust compiles the whole app"
+    & npm run build:offline
+    if ($LASTEXITCODE -ne 0) { throw "build failed with exit code $LASTEXITCODE" }
+} finally {
+    Pop-Location
+}
+
+Write-Step "Result"
+$msi = Get-ChildItem (Join-Path $WorkDir "src-tauri\target\release\bundle\msi\*.msi") -ErrorAction SilentlyContinue |
+       Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if (-not $msi) { throw "build finished but no MSI was produced; check the output above" }
+$hash = (Get-FileHash $msi.FullName -Algorithm SHA256).Hash
+Write-Ok ("MSI:    " + $msi.FullName)
+Write-Ok ("size:   " + [math]::Round($msi.Length / 1MB, 1) + " MB")
+Write-Ok ("sha256: " + $hash)
+$built = "version " + $fingerprint.Version + ", card code " + $fingerprint.Card
+if ($source.Sha) { $built = "commit " + $source.Sha.Substring(0, 12) + ", " + $built }
+Write-Host ("`n   Built " + $built) -ForegroundColor Yellow
+Write-Host "   The build is unsigned, so SmartScreen will warn on first run." -ForegroundColor Yellow
+Write-Host "   Install Npcap (Wireshark) if you have not, then run the app as Administrator." -ForegroundColor Yellow
+if ($fingerprint.Card -ne "present") {
+    Write-Host "   That build has no target card in it." -ForegroundColor Red
+}
+Start-Process explorer.exe "/select,`"$($msi.FullName)`""
