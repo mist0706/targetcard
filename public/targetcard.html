@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>targetcard</title>
+    <link rel="stylesheet" href="/src/js/targetcard.css" />
+  </head>
+  <body class="is-empty">
+    <!-- A small always-on-top card. Drag anywhere on the panel to move it. -->
+    <div class="card" data-tauri-drag-region>
+      <div class="name" id="tc-name" data-tauri-drag-region></div>
+      <div class="meta">
+        <span class="class" id="tc-class" data-tauri-drag-region></span>
+        <span class="level" id="tc-level" data-tauri-drag-region></span>
+      </div>
+      <div class="scores">
+        <span class="gs" id="tc-gs">GS ...</span>
+        <span class="cp" id="tc-cp"></span>
+      </div>
+      <div class="hint" id="tc-hint"></div>
+    </div>
+    <script src="/src/js/targetcard.js"></script>
+  </body>
+</html>
