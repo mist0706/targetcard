@@ -34,6 +34,10 @@ use tokio::sync::mpsc;
 use a2tools_dps_meter_lib::capture::captured_payload::CapturedPayload;
 use a2tools_dps_meter_lib::capture::combat_port_detector::CombatPortDetector;
 use a2tools_dps_meter_lib::capture::pcap_capturer::PcapCapturer;
+use a2tools_dps_meter_lib::combat::capture_dispatcher::CaptureDispatcher;
+use a2tools_dps_meter_lib::combat::data_storage::DataStorage;
+use a2tools_dps_meter_lib::combat::ping_tracker::PingTracker;
+use a2tools_dps_meter_lib::i18n::lookup::{NpcLookup, SkillLookup};
 
 fn host_name() -> String {
     for key in ["COMPUTERNAME", "HOSTNAME"] {
@@ -213,9 +217,30 @@ fn main() {
     let payloads = Arc::new(AtomicU64::new(0));
     let bytes = Arc::new(AtomicU64::new(0));
 
+    // The dispatcher owns port detection and decoding, and without it the
+    // capturer never learns which port to filter. It runs exactly as in the app,
+    // on a feed of payloads this tool records on the way past.
+    let storage = Arc::new(DataStorage::new());
+    let port_detector = Arc::new(CombatPortDetector::new());
+    let (forward_tx, forward_rx) = mpsc::channel::<CapturedPayload>(4096);
+    {
+        let dispatcher = CaptureDispatcher::new(
+            Arc::clone(&storage),
+            Arc::new(SkillLookup::new()),
+            Arc::new(NpcLookup::new()),
+            Arc::clone(&port_detector),
+            Arc::new(PingTracker::new()),
+        );
+        std::thread::spawn(move || match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            Ok(runtime) => runtime.block_on(dispatcher.run(forward_rx)),
+            Err(err) => eprintln!("decoder runtime: {err}"),
+        });
+    }
+
     // Markers come from stdin, so recording never waits on the user.
     let marker_handle = {
         let stop = Arc::clone(&stop);
+        let storage = Arc::clone(&storage);
         std::thread::spawn(move || {
             let stdin = std::io::stdin();
             let mut index = 0usize;
@@ -228,7 +253,17 @@ fn main() {
                 }
                 index += 1;
                 let at = now_ms();
-                let record = serde_json::json!({ "index": index, "at_ms": at, "label": label });
+                // The name table at the click is what makes this data usable:
+                // it turns "I clicked Sins" into an entity id to hunt for in the
+                // packets that follow.
+                let names: std::collections::BTreeMap<i32, String> =
+                    storage.get_nicknames().into_iter().collect();
+                let record = serde_json::json!({
+                    "index": index,
+                    "at_ms": at,
+                    "label": label,
+                    "names": names,
+                });
                 let _ = writeln!(markers_file, "{record}");
                 let _ = markers_file.flush();
                 println!("marker {index} at {} {}", rfc3339(at as i64), if label.is_empty() { "" } else { label.as_str() });
@@ -238,7 +273,6 @@ fn main() {
 
     // The meter's own capture stack: Npcap loaded at runtime, port detection,
     // TCP reassembly input as `CapturedPayload`.
-    let port_detector = Arc::new(CombatPortDetector::new());
     let (tx, mut rx) = mpsc::channel::<CapturedPayload>(4096);
     let capturer = PcapCapturer::new(tx, Arc::clone(&port_detector));
     let capture_available = a2tools_dps_meter_lib::platform::pcap::library_available();
@@ -268,6 +302,9 @@ fn main() {
                     payloads.fetch_add(1, Ordering::Relaxed);
                     bytes.fetch_add(payload.data.len() as u64, Ordering::Relaxed);
                 }
+                // Let the decoder see it too, so port detection and the name
+                // table keep working while we record.
+                let _ = forward_tx.try_send(payload);
             }
             Err(mpsc::error::TryRecvError::Empty) => std::thread::sleep(Duration::from_millis(5)),
             Err(mpsc::error::TryRecvError::Disconnected) => break,
