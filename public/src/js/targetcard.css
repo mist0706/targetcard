@@ -1,4 +1,4 @@
-/* The target card. Transparent window, one rounded panel, nothing else. */
+/* The players table. Transparent window, one rounded panel, nothing else. */
 html,
 body {
   margin: 0;
@@ -8,81 +8,110 @@ body {
   background: transparent;
   font-family: "Segoe UI", "Pretendard", system-ui, sans-serif;
   color: #e8e9f2;
+  font-size: 12.5px;
   user-select: none;
   cursor: default;
 }
 
-body.is-empty .card {
-  opacity: 0;
-}
-
-.card {
+.panel {
   box-sizing: border-box;
   margin: 6px;
-  padding: 8px 11px 9px;
+  padding: 7px 9px 6px;
   border-radius: 9px;
   background: rgba(14, 15, 22, 0.82);
   border: 1px solid rgba(120, 140, 255, 0.28);
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
-  transition: opacity 120ms ease-out;
   backdrop-filter: blur(6px);
 }
 
-.name {
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 1.15;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.head,
+.row {
+  display: grid;
+  grid-template-columns: 1fr 88px 58px;
+  align-items: center;
+  column-gap: 8px;
 }
 
-.meta {
-  margin-top: 1px;
-  font-size: 11px;
-  color: rgba(232, 233, 242, 0.62);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.meta .level:not(:empty)::before {
-  content: "· ";
-}
-
-.scores {
-  margin-top: 5px;
-  display: flex;
-  align-items: baseline;
-  gap: 9px;
-}
-
-.gs {
-  font-size: 17px;
-  font-weight: 700;
-  color: #8fd0ff;
-}
-
-.gs.is-pending {
+.head {
+  padding: 0 2px 5px;
+  border-bottom: 1px solid rgba(120, 140, 255, 0.22);
+  font-size: 9.5px;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
   color: rgba(232, 233, 242, 0.45);
-  font-weight: 500;
-  font-size: 14px;
+}
+
+.head .h-cp,
+.row .cp {
+  text-align: right;
+}
+
+.row {
+  padding: 4px 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.row:last-child {
+  border-bottom: 0;
+}
+
+/* The newest arrival, so the row you just saw appear is obvious. */
+.row.fresh {
+  background: rgba(120, 140, 255, 0.10);
+  border-radius: 4px;
+}
+
+.row.fresh .name {
+  font-weight: 600;
+}
+
+.name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.class {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: rgba(232, 233, 242, 0.62);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: rgba(232, 233, 242, 0.30);
 }
 
 .cp {
-  font-size: 11px;
-  color: rgba(232, 233, 242, 0.55);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
 }
 
-.hint {
-  margin-top: 2px;
-  font-size: 10px;
-  color: rgba(232, 233, 242, 0.38);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.cp.pending {
+  color: rgba(232, 233, 242, 0.35);
 }
 
-.hint:empty {
-  display: none;
+.empty {
+  padding: 8px 2px 9px;
+  color: rgba(232, 233, 242, 0.40);
+  font-size: 11.5px;
 }
+
+/* Aion's class palette, as close as the icons in game suggest. */
+.dot.gladiator { background: #e2554b; }
+.dot.templar { background: #d8a13c; }
+.dot.assassin { background: #a06ad4; }
+.dot.ranger { background: #63b25c; }
+.dot.sorcerer { background: #4f8fe0; }
+.dot.spiritmaster,
+.dot.elementalist { background: #d269b0; }
+.dot.cleric { background: #e8e2d2; }
+.dot.chanter { background: #3fbfb0; }
+.dot.fighter { background: #b0b6c4; }

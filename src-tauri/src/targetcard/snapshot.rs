@@ -26,11 +26,28 @@ use crate::combat::data_storage::DataStorage;
 pub struct TargetSnapshot {
     /// Every player character currently known, sorted by name.
     pub players: Vec<PlayerCard>,
+    /// The latest arrivals, newest first, capped for the table.
+    pub recent: Vec<PlayerCard>,
     /// The card to show right now, if any.
     pub focus_entity_id: Option<i32>,
     /// The local player's server, when the game has told us its id and we know
     /// the name for it. `None` lets the page fall back to its configured server.
     pub server_name: Option<String>,
+}
+
+/// How many arrivals the table shows.
+pub const RECENT_LIMIT: usize = 10;
+
+/// The most recently appeared players, newest first.
+///
+/// Entity ids are handed out in spawn order, so the highest ids are the latest
+/// arrivals. `build_cards` already sorts by name for the card list, so this is
+/// the one place that ordering gets undone.
+pub fn recent_players(cards: &[PlayerCard], limit: usize) -> Vec<PlayerCard> {
+    let mut recent: Vec<PlayerCard> = cards.iter().filter(|card| !card.is_self).cloned().collect();
+    recent.sort_by_key(|card| std::cmp::Reverse(card.entity_id));
+    recent.truncate(limit);
+    recent
 }
 
 /// Player ids: authoritative identity records plus confirmed player actors.
@@ -94,13 +111,14 @@ pub fn snapshot(storage: &DataStorage) -> TargetSnapshot {
     })
     .collect();
     let focus_entity_id = focus_entity(storage, &cards);
+    let recent = recent_players(&cards, RECENT_LIMIT);
     let server_name = storage
         .local_character_name()
         .map(|name| storage.player_server(&name))
         .filter(|server_id| *server_id != 0)
         .and_then(server_name_for_id)
         .map(str::to_string);
-    TargetSnapshot { players: cards, focus_entity_id, server_name }
+    TargetSnapshot { players: cards, recent, focus_entity_id, server_name }
 }
 
 #[cfg(test)]
@@ -108,7 +126,36 @@ mod tests {
     use super::*;
 
     #[test]
-    fn empty_storage_gives_an_empty_snapshot() {
+    fn the_table_lists_the_latest_arrivals_newest_first() {
+        let storage = DataStorage::new();
+        // Ids are handed out in spawn order: 4715 arrived before 4717.
+        storage.append_nickname_authoritative(4715, "Miku");
+        storage.append_nickname_authoritative(4717, "Sins");
+        storage.append_nickname_authoritative(4716, "Alpha");
+
+        let names: Vec<String> = snapshot(&storage)
+            .recent
+            .into_iter()
+            .map(|card| card.name)
+            .collect();
+        assert_eq!(names, vec!["Sins", "Alpha", "Miku"]);
+    }
+
+    #[test]
+    fn the_table_stops_at_ten_rows() {
+        let storage = DataStorage::new();
+        for id in 100..115 {
+            storage.append_nickname_authoritative(id, &format!("P{id}"));
+        }
+        let recent = snapshot(&storage).recent;
+        assert_eq!(recent.len(), RECENT_LIMIT);
+        // The newest arrival is first, so the oldest five must have fallen off.
+        assert_eq!(recent[0].name, "P114");
+        assert_eq!(recent[RECENT_LIMIT - 1].name, "P105");
+    }
+
+    #[test]
+    fn an_empty_storage_gives_an_empty_snapshot() {
         let storage = DataStorage::new();
         let snapshot = snapshot(&storage);
         assert!(snapshot.players.is_empty());

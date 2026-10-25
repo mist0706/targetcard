@@ -6,19 +6,17 @@
     <title>targetcard</title>
     <link rel="stylesheet" href="/src/js/targetcard.css" />
   </head>
-  <body class="is-empty">
-    <!-- A small always-on-top card. Drag anywhere on the panel to move it. -->
-    <div class="card" data-tauri-drag-region>
-      <div class="name" id="tc-name" data-tauri-drag-region></div>
-      <div class="meta">
-        <span class="class" id="tc-class" data-tauri-drag-region></span>
-        <span class="level" id="tc-level" data-tauri-drag-region></span>
+  <body>
+    <!-- The players table. Drag anywhere on the panel to move it. -->
+    <div class="panel" data-tauri-drag-region>
+      <div class="head" data-tauri-drag-region>
+        <span class="h-name">name</span>
+        <span class="h-class">class</span>
+        <span class="h-cp">cp</span>
       </div>
-      <div class="scores">
-        <span class="gs" id="tc-gs">GS ...</span>
-        <span class="cp" id="tc-cp"></span>
+      <div class="rows" id="tc-rows">
+        <div class="empty" data-tauri-drag-region>waiting for players</div>
       </div>
-      <div class="hint" id="tc-hint"></div>
     </div>
     <script src="/src/js/targetcard.js"></script>
   </body>
