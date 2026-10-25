@@ -137,7 +137,18 @@ pub fn start(app_data_dir: PathBuf, log_path: PathBuf) -> bool {
         config.upload_url,
         config.interval_secs
     );
-    tokio::spawn(async move {
+    // Its own thread and its own runtime. `tokio::spawn` here would panic: the
+    // setup hook runs on the main thread, outside Tauri's async runtime, and the
+    // panic takes the whole app down before a window is drawn.
+    std::thread::spawn(move || {
+        let runtime = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                tracing::warn!("diagnostics: could not start a runtime: {error}");
+                return;
+            }
+        };
+        runtime.block_on(async move {
         let session = format!("{}-logs", host_name());
         let mut last_sent: Option<(u64, u64)> = None; // (len, mtime secs)
         loop {
@@ -178,6 +189,7 @@ pub fn start(app_data_dir: PathBuf, log_path: PathBuf) -> bool {
                 }
             }
         }
+        });
     });
     true
 }
@@ -209,6 +221,23 @@ mod tests {
         let zipped = gzip(&text).unwrap();
         assert!(zipped.len() < text.len() / 2, "gzip should shrink a log tail");
         assert_eq!(&zipped[..2], &[0x1f, 0x8b]);
+    }
+
+    #[test]
+    fn starting_the_watcher_does_not_need_an_async_runtime() {
+        // This is a plain sync test on purpose: the app calls start() from the
+        // setup hook, which is not inside a tokio runtime. Calling tokio::spawn
+        // there panicked and killed the process before any window appeared.
+        let dir = temp_dir("start");
+        assert!(!start(dir.clone(), dir.join("debug.log")), "no config, no watcher");
+
+        std::fs::write(
+            config_path(&dir),
+            r#"{"upload_url":"http://127.0.0.1:1","token":"t","interval_secs":30}"#,
+        )
+        .unwrap();
+        assert!(start(dir.clone(), dir.join("debug.log")), "a config starts the watcher");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
