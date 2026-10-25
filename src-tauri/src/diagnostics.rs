@@ -166,15 +166,16 @@ pub fn start(app_data_dir: PathBuf, log_path: PathBuf) -> bool {
             if meta.len() == 0 {
                 continue;
             }
+            // Sent every interval even when the log has not grown. Skipping
+            // unchanged logs saved nothing worth saving and made "is the app
+            // alive, is the collector reachable" unanswerable during quiet
+            // stretches, which is exactly when the question comes up.
             let mtime = meta
                 .modified()
                 .ok()
                 .and_then(|at| at.duration_since(UNIX_EPOCH).ok())
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
-            if last_sent == Some((meta.len(), mtime)) {
-                continue; // nothing written since the last upload
-            }
 
             let Some(tail) = tail(&log_path, MAX_TAIL_BYTES) else {
                 continue;
