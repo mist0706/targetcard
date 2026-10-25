@@ -151,8 +151,14 @@ pub fn start(app_data_dir: PathBuf, log_path: PathBuf) -> bool {
         runtime.block_on(async move {
         let session = format!("{}-logs", host_name());
         let mut last_sent: Option<(u64, u64)> = None; // (len, mtime secs)
+        let interval = config.interval_secs.max(30);
+        // First sample a minute in, not five: when someone starts the app to
+        // check whether the upload works, waiting five minutes to find out is
+        // its own problem.
+        let mut wait = interval.min(60);
         loop {
-            tokio::time::sleep(Duration::from_secs(config.interval_secs.max(30))).await;
+            tokio::time::sleep(Duration::from_secs(wait)).await;
+            wait = interval;
 
             let Ok(meta) = std::fs::metadata(&log_path) else {
                 continue;
