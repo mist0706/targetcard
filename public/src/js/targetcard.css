@@ -41,6 +41,18 @@ body {
   color: rgba(232, 233, 242, 0.45);
 }
 
+.zone-tag {
+  font-style: normal;
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  padding: 1px 4px;
+  margin-right: 5px;
+  border-radius: 3px;
+  background: rgba(214, 88, 120, 0.22);
+  color: #f08aa4;
+  vertical-align: 1px;
+}
+
 .head .h-cp,
 .row .cp {
   text-align: right;

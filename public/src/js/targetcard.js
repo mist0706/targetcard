@@ -204,6 +204,11 @@
       server = snapshot?.server_name || FALLBACK_SERVER;
       lastRecent = snapshot?.recent || [];
       render();
+      // Zone: the Abyss tag is worth seeing before the roster fills in, and it
+      // comes from the map the game loaded rather than from guesswork.
+      const tag = document.getElementById("tc-zone");
+      if (tag) tag.hidden = !snapshot?.in_abyss;
+
       for (const player of lastRecent) {
         if (player.combat_power == null) enqueue(player);
       }

@@ -30,6 +30,10 @@ pub struct TargetSnapshot {
     pub recent: Vec<PlayerCard>,
     /// The card to show right now, if any.
     pub focus_entity_id: Option<i32>,
+    /// The map the player last loaded into, as the game stated it.
+    pub map_id: Option<i32>,
+    /// Whether the player is in the Abyss right now.
+    pub in_abyss: bool,
     /// The local player's server, when the game has told us its id and we know
     /// the name for it. `None` lets the page fall back to its configured server.
     pub server_name: Option<String>,
@@ -146,7 +150,14 @@ pub fn snapshot(storage: &DataStorage) -> TargetSnapshot {
         .filter(|server_id| *server_id != 0)
         .and_then(server_name_for_id)
         .map(str::to_string);
-    TargetSnapshot { players: cards, recent, focus_entity_id, server_name }
+    TargetSnapshot {
+        players: cards,
+        recent,
+        focus_entity_id,
+        map_id: storage.current_map_id(),
+        in_abyss: storage.in_abyss(),
+        server_name,
+    }
 }
 
 #[cfg(test)]
@@ -232,6 +243,7 @@ mod tests {
         let snapshot = snapshot(&storage);
         assert!(snapshot.players.is_empty());
         assert_eq!(snapshot.focus_entity_id, None);
+        assert!(!snapshot.in_abyss, "an empty session is not in the Abyss");
         assert_eq!(snapshot.server_name, None);
     }
 

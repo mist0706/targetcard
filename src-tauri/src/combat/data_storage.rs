@@ -84,6 +84,25 @@ pub fn is_open_world_map(map_id: i32) -> bool {
     OPEN_WORLD_MAPS.contains(&map_id)
 }
 
+/// Map ids that are the Abyss, from `src/data/abyss_maps.json`.
+///
+/// Empty until an id seen inside the Abyss is recorded. `DataStorage::in_abyss`
+/// falls back to the artifact broadcasts, which only arrive there, so a wrong or
+/// missing table degrades to "probably, going by the traffic".
+static ABYSS_MAPS: std::sync::LazyLock<HashSet<i32>> = std::sync::LazyLock::new(|| {
+    #[derive(serde::Deserialize)]
+    struct Table {
+        maps: HashSet<i32>,
+    }
+    serde_json::from_str::<Table>(include_str!("../../../src/data/abyss_maps.json"))
+        .map(|t| t.maps)
+        .unwrap_or_default()
+});
+
+pub fn is_abyss_map(map_id: i32) -> bool {
+    ABYSS_MAPS.contains(&map_id)
+}
+
 /// The dungeon the player is in, from the roster's dungeon and the last map
 /// load.
 ///
@@ -104,6 +123,11 @@ pub fn is_open_world_map(map_id: i32) -> bool {
 /// - a dungeon's map (600000-699999, or the roster's own id): that dungeon;
 /// - any other instance (a seal, a quest scene): none, whatever the roster
 ///   says.
+/// How long an artifact broadcast keeps counting as "in the Abyss". They are
+/// re-sent periodically while the player is there, so this only has to outlast
+/// the gap between them.
+const ABYSS_SIGNAL_MS: i64 = 120_000;
+
 fn dungeon_of_map(roster_dungeon: i32, map: Option<i32>) -> i32 {
     match map {
         None => roster_dungeon,
@@ -2137,7 +2161,11 @@ impl DataStorage {
         }
         let dungeon = dungeon_of_map(inner.roster_dungeon_id, Some(map_id));
         if dungeon != inner.current_dungeon_id {
-            tracing::debug!("Map {map_id}: dungeon {} -> {dungeon}", inner.current_dungeon_id);
+            tracing::info!(
+                "Map {map_id}: dungeon {} -> {dungeon}{}",
+                inner.current_dungeon_id,
+                if is_abyss_map(map_id) { " (Abyss)" } else { "" }
+            );
             inner.current_dungeon_id = dungeon;
         }
     }
@@ -2150,6 +2178,25 @@ impl DataStorage {
             inner.roster_dungeon_id = dungeon_id;
             inner.current_dungeon_id = dungeon_of_map(dungeon_id, inner.current_map_id);
         }
+    }
+
+    /// The map the player last loaded into, as the game stated it.
+    pub fn current_map_id(&self) -> Option<i32> {
+        self.inner.read().current_map_id
+    }
+
+    /// Is the player in the Abyss?
+    ///
+    /// Two signals, strongest first: a map id known to be the Abyss, and the
+    /// artifact broadcasts, which the game only sends while the player is there.
+    /// The second is why this can answer before the table has any entries.
+    pub fn in_abyss(&self) -> bool {
+        let inner = self.inner.read();
+        if inner.current_map_id.is_some_and(is_abyss_map) {
+            return true;
+        }
+        inner.abyss_artifacts_seen_ms != 0
+            && now_ms().saturating_sub(inner.abyss_artifacts_seen_ms) < ABYSS_SIGNAL_MS
     }
 
     pub fn current_dungeon_id(&self) -> i32 {

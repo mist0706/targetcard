@@ -1,0 +1,4 @@
+{
+  "_note": "Map ids that are the Abyss. Empty until a map id seen inside the Abyss is added; the card falls back to the artifact broadcasts until then.",
+  "maps": []
+}
