@@ -564,6 +564,12 @@ impl PcapCapturer {
                     if !device.has_addresses || crate::platform::pcap::skip_device(&device.name) {
                         continue;
                     }
+                    // The same rule as at start: the game does not travel over
+                    // loopback. It shows up here as a "new device" whenever the
+                    // adapter list changes, and it is no more useful then.
+                    if device.is_loopback {
+                        continue;
+                    }
                     if shared.failed.lock().unwrap_or_else(|p| p.into_inner()).contains(&device.name) {
                         continue;
                     }
