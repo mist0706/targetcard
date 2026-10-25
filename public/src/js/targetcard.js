@@ -46,7 +46,8 @@
   // costs one lookup of our own name and is then remembered for the session.
   let inAbyss = false;
   let selfRace = null;
-  let askingSelfRace = false;
+  let selfLevel = null;
+  let askingSelf = false;
   let server = FALLBACK_SERVER;
 
   // The parser calls it Elementalist; the game and the API call it Spiritmaster.
@@ -187,7 +188,12 @@
           // unique (five level 45 players called Tails across EU), so when the
           // name is shared the class is what tells them apart.
           const reply = await withTimeout(
-            invoke("targetcard_score", { name, server, class: classOf(name) }),
+            invoke("targetcard_score", {
+              name,
+              server,
+              class: classOf(name),
+              floor: levelFloor(),
+            }),
             LOOKUP_TIMEOUT_MS,
           );
           if (reply?.score) {
@@ -213,27 +219,48 @@
     }
   }
 
-  /// Learn which faction we are, so the Abyss filter has something to compare to.
-  /// One request, once per session, and only while the player is in the Abyss.
-  async function askSelfRace(name, serverName) {
-    if (selfRace != null || askingSelfRace || !name) return;
-    askingSelfRace = true;
+  /// Learn our own faction and level from our own character sheet. One request,
+  /// once per session. The faction is what the Abyss filter compares against; the
+  /// level is what stops a low-level namesake on our server from answering for
+  /// somebody we are actually fighting.
+  async function askSelf(name, serverName) {
+    if ((selfRace != null && selfLevel != null) || askingSelf || !name) return;
+    askingSelf = true;
     try {
       const reply = await withTimeout(
-        invoke("targetcard_score", { name, server: serverName || server, class: null }),
+        invoke("targetcard_score", {
+          name,
+          server: serverName || server,
+          class: null,
+          floor: null,
+        }),
         LOOKUP_TIMEOUT_MS,
       );
       const race = reply?.score?.race ?? null;
-      if (race != null) {
-        selfRace = race;
-        console.log("targetcard: our faction is", race === 1 ? "Elyos" : "Asmodian");
+      const level = reply?.score?.level ?? null;
+      if (race != null) selfRace = race;
+      if (level != null) selfLevel = level;
+      if (race != null || level != null) {
+        console.log(
+          "targetcard: we are",
+          race === 1 ? "Elyos" : race === 2 ? "Asmodian" : "of unknown faction",
+          level ? `at level ${level}` : "at an unknown level",
+        );
         render();
       }
     } catch (error) {
-      console.error("targetcard: could not learn our faction", error);
+      console.error("targetcard: could not read our own character", error);
     } finally {
-      askingSelfRace = false;
+      askingSelf = false;
     }
+  }
+
+  /// The lowest level worth considering for the people in this table. Level 45 is
+  /// where PvP happens, and a name shared with an alt twenty levels below us is not
+  /// the person on screen.
+  function levelFloor() {
+    if (selfLevel == null || selfLevel < 30) return null;
+    return selfLevel - 5;
   }
 
   async function tick() {
@@ -243,7 +270,7 @@
       lastRecent = snapshot?.recent || [];
       inAbyss = !!snapshot?.in_abyss;
       render();
-      if (inAbyss) askSelfRace(snapshot?.local_name, snapshot?.server_name);
+      askSelf(snapshot?.local_name, snapshot?.server_name);
 
       for (const player of lastRecent) {
         if (player.combat_power == null) enqueue(player);

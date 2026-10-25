@@ -81,11 +81,28 @@ impl ScoreService {
     /// power is indistinguishable between "the API has no such character", "the
     /// request never completed" and "the response changed shape". Those need
     /// different answers, and the log is the only place to tell them apart.
-    pub async fn lookup(&mut self, name: &str, server: &str, class: Option<&str>) -> ScoreReply {
+    pub async fn lookup(
+        &mut self,
+        name: &str,
+        server: &str,
+        class: Option<&str>,
+        floor: Option<u32>,
+    ) -> ScoreReply {
         let started = std::time::Instant::now();
         if let Some(hit) = self.cached(name, server) {
-            tracing::debug!("targetcard: {name}@{server} cache hit");
-            return ScoreReply::found(hit);
+            // A cached answer can be the wrong namesake: it was stored before the
+            // level floor was known, or for a query that had no floor. If it cannot
+            // be the player we are asking about, search again rather than hand back
+            // a character twenty levels too low.
+            let below_floor = floor.is_some_and(|f| hit.level.unwrap_or(0) < f);
+            if !below_floor {
+                tracing::debug!("targetcard: {name}@{server} cache hit");
+                return ScoreReply::found(hit);
+            }
+            tracing::debug!(
+                "targetcard: {name}@{server} cached as a level {}, below the floor; looking again",
+                hit.level.unwrap_or(0)
+            );
         }
         let Some(id) = server_id(server) else {
             tracing::warn!("targetcard: {name}: unknown server '{server}', nothing to look up");
@@ -94,7 +111,10 @@ impl ScoreService {
         let Some(candidates) = self.search(name).await else {
             return ScoreReply::missing("not_found");
         };
-        let Some(score) = self.resolve(name, id, class, started, &candidates).await else {
+        let Some(score) = self
+            .resolve(name, id, class, floor.unwrap_or(0), started, &candidates)
+            .await
+        else {
             return ScoreReply::missing("ambiguous");
         };
         self.cache.insert(
@@ -136,6 +156,7 @@ impl ScoreService {
         name: &str,
         local: u16,
         class: Option<&str>,
+        floor: u32,
         started: std::time::Instant,
         candidates: &[Candidate],
     ) -> Option<GearScore> {
@@ -147,7 +168,7 @@ impl ScoreService {
         // that class. One extra request, and it settles the Althea case.
         if let Some(candidate) = candidates
             .iter()
-            .filter(|c| c.server_id == local)
+            .filter(|c| c.server_id == local && c.level >= floor)
             .max_by_key(|c| c.level)
         {
             if let Some(score) = self.score_of(candidate, started).await {
@@ -180,7 +201,7 @@ impl ScoreService {
             .cloned()
             .collect();
 
-        match plan(&rest, u16::MAX, wanted_class.is_some()) {
+        match plan(&rest, u16::MAX, wanted_class.is_some(), floor) {
             Plan::Use(index) => {
                 let candidate = &rest[index];
                 tracing::debug!(
@@ -335,8 +356,34 @@ mod tests {
     fn unknown_server_short_circuits_before_any_request() {
         // No client call can happen here: server_id returns None first.
         let mut service = ScoreService::new(&scratch_dir());
-        let result = tauri::async_runtime::block_on(service.lookup("Sins", "Nowhere", None));
+        let result = tauri::async_runtime::block_on(service.lookup("Sins", "Nowhere", None, None));
         assert!(result.score.is_none());
         assert_eq!(result.reason, "no_server", "an unknown server is not an ambiguity");
+    }
+
+    /// Against the live API, the case that produced a 5,333: a level 11 namesake on
+    /// our own server, and the level 45 Asmodians who could actually have done it.
+    /// Ignored by default because it needs the network; run with
+    /// `cargo test -- --ignored betelgeuse`.
+    #[test]
+    #[ignore]
+    fn betelgeuse_is_not_the_level_eleven_alt_on_our_server() {
+        let mut service = ScoreService::new(&scratch_dir());
+        let without_floor = tauri::async_runtime::block_on(service.lookup(
+            "BeTeLGeuSe",
+            "Phernos",
+            None,
+            None,
+        ));
+        let with_floor = tauri::async_runtime::block_on(service.lookup(
+            "BeTeLGeuSe",
+            "Phernos",
+            None,
+            Some(40),
+        ));
+        println!("no floor: {:?}", without_floor);
+        println!("floor 40: {:?}", with_floor);
+        assert_eq!(with_floor.reason, "ambiguous");
+        assert!(with_floor.score.is_none());
     }
 }

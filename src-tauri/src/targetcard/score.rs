@@ -259,28 +259,45 @@ pub enum Plan {
 /// 3. a single candidate at arena level, since level 45 is the only way into a 5v5
 /// 4. several at arena level: only a class can settle it
 ///
+/// `floor` is the lowest level worth considering, normally our own level minus a
+/// few. Names are shared across servers, and the one on your own server is often
+/// a low-level alt: a level 11 "Betelgeuse" answered for the level 45 Asmodian who
+/// killed the player in four hits, because it was on the right server. Candidates
+/// below the floor are ignored unless nothing else is left, so a genuinely
+/// low-level player still resolves.
+///
 /// Rule 2 is not a detail. Without it a name with one match anywhere in EU came
 /// back as a dash, which is how an entire arena roster turned into dashes.
-pub fn plan(candidates: &[Candidate], local: u16, has_class: bool) -> Plan {
+pub fn plan(candidates: &[Candidate], local: u16, has_class: bool, floor: u32) -> Plan {
     if candidates.is_empty() {
         return Plan::GiveUp;
     }
-    if let Some((index, _)) = candidates
+    // Everything below works on the candidates that are plausible for someone we
+    // could actually be fighting. If none are, the name really does belong to a
+    // low-level character and the old order applies unchanged.
+    let plausible: Vec<usize> = candidates
         .iter()
         .enumerate()
-        .filter(|(_, c)| c.server_id == local)
-        .max_by_key(|(_, c)| c.level)
+        .filter(|(_, c)| c.level >= floor)
+        .map(|(index, _)| index)
+        .collect();
+    if plausible.is_empty() {
+        return plan(candidates, local, has_class, 0);
+    }
+    if let Some(index) = plausible
+        .iter()
+        .copied()
+        .filter(|&i| candidates[i].server_id == local)
+        .max_by_key(|&i| candidates[i].level)
     {
         return Plan::Use(index);
     }
-    if candidates.len() == 1 {
-        return Plan::Use(0);
+    if plausible.len() == 1 {
+        return Plan::Use(plausible[0]);
     }
-    let mut arena: Vec<usize> = candidates
-        .iter()
-        .enumerate()
-        .filter(|(_, c)| c.level >= 40)
-        .map(|(index, _)| index)
+    let mut arena: Vec<usize> = plausible
+        .into_iter()
+        .filter(|&i| candidates[i].level >= 40)
         .collect();
     arena.sort_by_key(|&index| std::cmp::Reverse(candidates[index].level));
     if arena.len() == 1 {
@@ -538,7 +555,7 @@ mod tests {
     #[test]
     fn one_match_anywhere_is_the_answer_even_with_no_class() {
         let only = vec![candidate("7rameee", 45, 2321, "Agnita")];
-        assert_eq!(plan(&only, 1313, false), Plan::Use(0));
+        assert_eq!(plan(&only, 1313, false, 0), Plan::Use(0));
     }
 
     #[test]
@@ -547,7 +564,7 @@ mod tests {
             candidate("Merum", 12, 1310, "Nania"),
             candidate("Merum", 45, 2313, "Munin"),
         ];
-        assert_eq!(plan(&names, 1313, false), Plan::Use(1));
+        assert_eq!(plan(&names, 1313, false, 0), Plan::Use(1));
     }
 
     #[test]
@@ -556,7 +573,32 @@ mod tests {
             candidate("Kiria", 45, 2312, "Ulgorn"),
             candidate("Kiria", 41, 1313, "Phernos"),
         ];
-        assert_eq!(plan(&names, 1313, false), Plan::Use(1));
+        assert_eq!(plan(&names, 1313, false, 0), Plan::Use(1));
+    }
+
+    #[test]
+    fn an_alt_on_our_server_does_not_answer_for_the_opponent_who_killed_us() {
+        // The real roster: a level 11 Elyos on our own server, and five level 45
+        // Asmodians elsewhere. The wrong answer was 5,333 combat power.
+        let names = vec![
+            candidate("Betelgeuse", 11, 1313, "Phernos"),
+            candidate("Betelgeuse", 45, 2315, "Zemurru"),
+            candidate("Betelgeuse", 45, 2312, "Ulgorn"),
+            candidate("Betelgeuse", 45, 2304, "Lumiel"),
+            candidate("Betelgeuse", 45, 2310, "Hadala"),
+            candidate("Betelgeuse", 45, 2301, "Israphel"),
+        ];
+        assert_eq!(plan(&names, 1313, false, 40), Plan::GiveUp, "five, so no guess");
+        assert_eq!(
+            plan(&names, 1313, true, 40),
+            Plan::ByClass(vec![1, 2, 3, 4, 5])
+        );
+    }
+
+    #[test]
+    fn a_genuinely_low_level_player_still_resolves() {
+        let names = vec![candidate("Betelgeuse", 11, 1313, "Phernos")];
+        assert_eq!(plan(&names, 1313, false, 40), Plan::Use(0));
     }
 
     #[test]
@@ -565,7 +607,7 @@ mod tests {
             candidate("Kar", 45, 2312, "Ulgorn"),
             candidate("Kar", 45, 2302, "Zikel"),
         ];
-        assert_eq!(plan(&names, 1313, false), Plan::GiveUp);
-        assert_eq!(plan(&names, 1313, true), Plan::ByClass(vec![0, 1]));
+        assert_eq!(plan(&names, 1313, false, 0), Plan::GiveUp);
+        assert_eq!(plan(&names, 1313, true, 0), Plan::ByClass(vec![0, 1]));
     }
 }
