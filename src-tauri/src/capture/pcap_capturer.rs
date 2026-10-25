@@ -374,6 +374,10 @@ struct Shared {
     failed: Mutex<HashSet<String>>,
     /// Packets lost because the parser had not taken the earlier ones yet.
     dropped: AtomicU64,
+    /// Every captured packet, whether it became a payload or not. The heartbeat
+    /// reads it: without it, "the log is quiet" cannot be told apart from "the
+    /// capture is receiving nothing", which are opposite problems.
+    received: AtomicU64,
     /// Which port the game is on, once found: each capture thread filters
     /// for it.
     port_detector: Arc<CombatPortDetector>,
@@ -402,6 +406,7 @@ impl PcapCapturer {
                 active: Mutex::default(),
                 failed: Mutex::default(),
                 dropped: AtomicU64::new(0),
+                received: AtomicU64::new(0),
                 port_detector,
                 unfiltered: AtomicBool::new(false),
             }),
@@ -524,8 +529,27 @@ impl PcapCapturer {
         let shared = self.shared.clone();
         std::thread::spawn(move || {
             let mut reported_drops = 0;
+            let mut last_beat = now_ms();
+            let mut last_received = 0u64;
             while running.load(Ordering::SeqCst) {
                 std::thread::sleep(std::time::Duration::from_millis(DEVICE_SCAN_MS));
+                // Every minute: proof of life, and of what it is seeing. A quiet
+                // log otherwise means either "nothing to log" or "nothing is
+                // arriving", and those need different answers.
+                let now = now_ms();
+                if now - last_beat >= 60_000 {
+                    let received = shared.received.load(Ordering::Relaxed);
+                    let open = shared.active.lock().unwrap_or_else(|p| p.into_inner()).len();
+                    info!(
+                        "capture: {} packets in the last {} s, {} device(s) open, port {:?}",
+                        received.saturating_sub(last_received),
+                        (now - last_beat) / 1000,
+                        open,
+                        shared.port_detector.current_port()
+                    );
+                    last_beat = now;
+                    last_received = received;
+                }
                 let dropped = shared.dropped.load(Ordering::Relaxed);
                 if dropped > reported_drops {
                     warn!(
@@ -684,6 +708,7 @@ fn start_capture_thread(
                     } else {
                         now_ms()
                     };
+                    shared.received.fetch_add(1, Ordering::Relaxed);
                     let frame = unsafe { std::slice::from_raw_parts(data, len) };
                     if let Some(mut payload) = parse_tcp_payload(frame, link_type, &label) {
                         payload.captured_at_ms = ts;
