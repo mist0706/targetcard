@@ -46,13 +46,13 @@ pub const RECENT_LIMIT: usize = 10;
 /// past while you were reading a quest text is gone by the time you look up.
 pub const PRESENCE_TTL_MS: i64 = 30_000;
 
-/// Is this player still around? Party members always are: they are in the group
-/// even when they are on the other side of the zone producing no traffic.
+/// Is this player still around? Presence is refreshed by the state packets the
+/// client sends for anything it can see, so a player who walked away stops
+/// refreshing it and drops out after `PRESENCE_TTL_MS`.
 fn is_present(storage: &DataStorage, card: &PlayerCard, now: i64) -> bool {
-    card.in_party
-        || storage
-            .entity_last_seen(card.entity_id)
-            .is_some_and(|at| now.saturating_sub(at) <= PRESENCE_TTL_MS)
+    storage
+        .entity_last_seen(card.entity_id)
+        .is_some_and(|at| now.saturating_sub(at) <= PRESENCE_TTL_MS)
 }
 
 /// The most recently appeared players, newest first.
@@ -130,8 +130,12 @@ pub fn snapshot(storage: &DataStorage) -> TargetSnapshot {
     .collect();
     let focus_entity_id = focus_entity(storage, &cards);
     let now = crate::clock::now_ms();
+    // Party members are the meter's business, not this table's: they are already
+    // in its roster with the same numbers, and repeating them here pushes the
+    // strangers out of the ten slots.
     let visible: Vec<PlayerCard> = cards
         .iter()
+        .filter(|card| !card.in_party)
         .filter(|card| is_present(storage, card, now))
         .cloned()
         .collect();
@@ -197,7 +201,7 @@ mod tests {
     }
 
     #[test]
-    fn a_party_member_stays_without_traffic() {
+    fn party_members_are_left_to_the_meter() {
         use crate::combat::data_storage::PartyMember;
 
         let storage = DataStorage::new();
@@ -212,12 +216,14 @@ mod tests {
         );
         storage.forget_entity(4715);
 
+        // Alpha is a stranger with presence; Miku is in the party, so the table
+        // leaves her to the meter's own roster.
         let names: Vec<String> = snapshot(&storage)
             .recent
             .into_iter()
             .map(|card| card.name)
             .collect();
-        assert_eq!(names, vec!["Alpha", "Miku"]);
+        assert_eq!(names, vec!["Alpha"]);
     }
 
     #[test]
