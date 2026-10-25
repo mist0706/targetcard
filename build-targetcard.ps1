@@ -75,7 +75,7 @@ param(
 
 # Bumped whenever this script changes, and printed, so a stale copy in Downloads
 # or %TEMP% says so instead of failing on a parameter it has never heard of.
-$ScriptStamp = "2026-10-25T12:00Z"
+$ScriptStamp = "2026-10-25T12:40Z"
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"      # speeds up Invoke-WebRequest a lot
@@ -395,35 +395,45 @@ function Expand-Source([string]$Zip) {
         Write-Ok "$WorkDir already has the source (use -Force to replace it)"
         return
     }
-    # Keep the expensive build artefacts across a re-unpack: `src-tauri\target` is
-    # 10-30 minutes of Rust, and node_modules is a few hundred MB of download.
-    $keep = @(
-        @{ Path = (Join-Path $WorkDir "src-tauri\target"); Stash = (Join-Path $env:TEMP "tc-keep-target") },
-        @{ Path = (Join-Path $WorkDir "node_modules");        Stash = (Join-Path $env:TEMP "tc-keep-modules") }
-    )
-    foreach ($item in $keep) {
-        if (Test-Path $item.Stash) { Remove-Item $item.Stash -Recurse -Force -ErrorAction SilentlyContinue }
-        if (Test-Path $item.Path) {
-            Write-Host "   keeping $($item.Path) for the rebuild"
-            Move-Item $item.Path $item.Stash -Force
-        }
-    }
-    if (Test-Path $WorkDir) { Remove-Item $WorkDir -Recurse -Force }
-    New-Item -ItemType Directory -Path $WorkDir | Out-Null
+
+    # Extract into a staging folder, then copy over the working tree. Nothing is
+    # moved out and back: a program holding a handle inside target (Explorer with
+    # the MSI selected is enough) used to abort the whole build on the move,
+    # before a single line was compiled.
+    $stage = Join-Path $env:TEMP "targetcard-stage"
+    if (Test-Path $stage) { Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue }
+    New-Item -ItemType Directory -Path $stage -Force | Out-Null
     Write-Host "   extracting $(Split-Path $Zip -Leaf)"
-    [IO.Compression.ZipFile]::ExtractToDirectory($Zip, $WorkDir)
+    [IO.Compression.ZipFile]::ExtractToDirectory($Zip, $stage)
+
     # GitHub archives put everything under one folder: `targetcard-main` or
     # `targetcard-<sha>`. Flatten it so paths match the docs.
-    if (-not (Test-Path (Join-Path $WorkDir "package.json"))) {
-        $tops = @(Get-ChildItem $WorkDir -Directory)
+    if (-not (Test-Path (Join-Path $stage "package.json"))) {
+        $tops = @(Get-ChildItem $stage -Directory)
         if ($tops.Count -eq 1 -and (Test-Path (Join-Path $tops[0].FullName "package.json"))) {
-            Get-ChildItem $tops[0].FullName -Force | Move-Item -Destination $WorkDir -Force
+            Get-ChildItem $tops[0].FullName -Force | Move-Item -Destination $stage -Force
             Remove-Item $tops[0].FullName -Recurse -Force
         }
     }
-    foreach ($item in $keep) {
-        if (Test-Path $item.Stash) { Move-Item $item.Stash $item.Path -Force }
+    if (-not (Test-Path (Join-Path $stage "package.json"))) { throw "unexpected archive layout: no package.json in the archive" }
+
+    # Clear the old source, but never the two directories that cost real time:
+    # src-tauri\target is 10-30 minutes of Rust, node_modules a few hundred MB.
+    New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null
+    Get-ChildItem $WorkDir -Force |
+        Where-Object { $_.Name -ne "node_modules" -and $_.Name -ne "src-tauri" } |
+        ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+    $src = Join-Path $WorkDir "src-tauri"
+    if (Test-Path $src) {
+        Get-ChildItem $src -Force |
+            Where-Object { $_.Name -ne "target" } |
+            ForEach-Object { Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
     }
+
+    Write-Host "   applying source over $WorkDir (build output kept)"
+    Copy-Item -Path (Join-Path $stage "*") -Destination $WorkDir -Recurse -Force
+    Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+
     if (-not (Test-Path (Join-Path $WorkDir "package.json"))) { throw "unexpected archive layout: no package.json in $WorkDir" }
     Write-Ok "source at $WorkDir"
 }
@@ -517,4 +527,3 @@ if ($NoInstall) {
 if (-not (Set-DiagnosticsCollector)) {
     Write-Host "   diagnostics: no -CollectorToken given, the app uploads nothing." -ForegroundColor Yellow
 }
-Start-Process explorer.exe "/select,`"$($msi.FullName)`""
