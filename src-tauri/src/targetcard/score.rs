@@ -173,12 +173,29 @@ pub struct Candidate {
 /// `Ninetails` and one `Tails` per EU server. Taking the first row regardless
 /// produced a real number for the wrong character, which is worse than no
 /// number, so only rows whose name is exactly the one asked for survive.
+/// Does the game's class name mean the API's class name?
+///
+/// The card normalises one pair: the game calls the class Elementalist where the
+/// API says Spiritmaster, so a comparison has to treat them as the same.
+pub fn same_class(a: &str, b: &str) -> bool {
+    let norm = |value: &str| {
+        let lower = value.trim().to_lowercase();
+        if lower == "elementalist" {
+            "spiritmaster".to_string()
+        } else {
+            lower
+        }
+    };
+    !a.trim().is_empty() && norm(a) == norm(b)
+}
+
 pub fn exact_candidates(payload: &serde_json::Value, wanted: &str) -> Vec<Candidate> {
     let Some(rows) = payload.get("list").and_then(|v| v.as_array()) else {
         return Vec::new();
     };
     let wanted = wanted.trim();
-    rows.iter()
+    let all: Vec<Candidate> = rows
+        .iter()
         .filter_map(|row| {
             let name = strip_tags(row.get("name")?.as_str()?);
             if !name.eq_ignore_ascii_case(wanted) {
@@ -193,55 +210,29 @@ pub fn exact_candidates(payload: &serde_json::Value, wanted: &str) -> Vec<Candid
                 race: row.get("race").and_then(|r| r.as_u64()).map(|r| r as u8),
             })
         })
-        .collect()
-}
+        .collect();
 
-/// Which candidate is the player the card is showing.
-///
-/// Names are not unique: `Tails` exists on six EU servers at level 45. In order:
-///
-/// 1. the player's own server, when it has a match
-/// 2. otherwise a single candidate at arena level, since a match on several
-///    servers with several level 45s is not an identification, it is a guess
-/// 3. otherwise a single candidate of any level
-///
-/// `None` means "ask again another way rather than show a number that might
-/// belong to somebody else".
-pub fn pick_candidate(candidates: &[Candidate], local_server: Option<u16>) -> Option<Candidate> {
-    if candidates.is_empty() {
-        return None;
-    }
-    if let Some(server) = local_server {
-        let mut here: Vec<&Candidate> = candidates.iter().filter(|c| c.server_id == server).collect();
-        if !here.is_empty() {
-            here.sort_by_key(|c| std::cmp::Reverse(c.level));
-            return Some(here[0].clone());
+    // The game states the name with its capitals and so does the API, so capitals
+    // are evidence, not noise. "BeTeLGeuSe" on Munin is the player who was on
+    // screen; "Betelgeuse" on Phernos is somebody else. Only when no candidate
+    // matches exactly do we fall back to ignoring case, since a name typed in a
+    // different case would otherwise resolve to nothing.
+    let same_case: Vec<Candidate> = all
+        .iter()
+        .filter(|candidate| candidate.name == wanted)
+        .cloned()
+        .collect();
+    if !same_case.is_empty() {
+        if same_case.len() < all.len() {
+            tracing::debug!(
+                "targetcard: {wanted}: {} of {} matches have the same capitals; using those",
+                same_case.len(),
+                all.len()
+            );
         }
+        return same_case;
     }
-    let mut grown: Vec<&Candidate> = candidates.iter().filter(|c| c.level >= 40).collect();
-    grown.sort_by_key(|c| std::cmp::Reverse(c.level));
-    if grown.len() == 1 {
-        return Some(grown[0].clone());
-    }
-    if !grown.is_empty() {
-        return None; // several arena-level players share the name
-    }
-    if candidates.len() == 1 {
-        return Some(candidates[0].clone());
-    }
-    None
-}
-
-/// Are these the same class, given the two vocabularies in play?
-///
-/// The parser calls one class Elementalist; the game and the API call it
-/// Spiritmaster. Everything else is spelled the same.
-pub fn same_class(a: &str, b: &str) -> bool {
-    let norm = |value: &str| {
-        let lower = value.trim().to_lowercase();
-        if lower == "elementalist" { "spiritmaster".to_string() } else { lower }
-    };
-    !a.trim().is_empty() && norm(a) == norm(b)
+    all
 }
 
 /// What to do with a set of exact name matches.
@@ -325,24 +316,63 @@ pub fn plan(candidates: &[Candidate], local: u16, has_class: bool, floor: u32) -
     Plan::GiveUp
 }
 
-/// The opposing-faction server paired with this one, when the ids follow the EU
-/// pattern: 13NN Elyos beside 23NN Asmodian, so Phernos 1313 with Munin 2313.
-///
-/// The pairing matters for the Abyss, where the people you meet are from the
-/// partner server. It also settled the case that started this: BeTeLGeuSe is a
-/// level 45 Cleric on Munin, and a level 11 alt on Phernos.
-pub fn paired_server(id: u16) -> Option<u16> {
-    let digits = id.to_string();
-    if digits.len() != 4 {
-        return None;
+/// One row of the official server list.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct Server {
+    pub id: u16,
+    pub region: String,
+    pub race: u8,
+    pub name: String,
+    pub short: String,
+}
+
+static SERVERS: std::sync::LazyLock<Vec<Server>> = std::sync::LazyLock::new(|| {
+    #[derive(serde::Deserialize)]
+    struct Doc {
+        servers: Vec<Server>,
     }
-    let (head, tail) = digits.split_at(2);
-    let partner = match head {
-        "13" => "23",
-        "23" => "13",
-        _ => return None,
-    };
-    format!("{partner}{tail}").parse().ok()
+    serde_json::from_str::<Doc>(include_str!("../../../src/data/servers.json"))
+        .map(|doc| doc.servers)
+        .unwrap_or_default()
+});
+
+/// The opposing-faction server paired with this one.
+///
+/// Taken from the official server list rather than guessed: within a region the
+/// Elyos and Asmodian servers are listed in a fixed order and pair by position, so
+/// Phernos 1313 (PHE) is paired with Munin 2313 (MUN). This is the server an Abyss
+/// opponent comes from, which makes it the strongest hint about who a name belongs
+/// to.
+pub fn paired_server(id: u16) -> Option<u16> {
+    let all = SERVERS.as_slice();
+    let mine = all.iter().find(|server| server.id == id)?;
+    let mut same_region: Vec<&Server> = all
+        .iter()
+        .filter(|server| server.region == mine.region && server.race == mine.race)
+        .collect();
+    same_region.sort_by_key(|server| server.id);
+    let position = same_region.iter().position(|server| server.id == id)?;
+    let mut partners: Vec<&Server> = all
+        .iter()
+        .filter(|server| server.region == mine.region && server.race != mine.race)
+        .collect();
+    partners.sort_by_key(|server| server.id);
+    partners.get(position).map(|server| server.id)
+}
+
+/// The three-letter tag the game prints beside a name, e.g. PHE for Phernos.
+pub fn server_short_name(id: u16) -> Option<&'static str> {
+    SERVERS
+        .iter()
+        .find(|server| server.id == id)
+        .map(|server| server.short.as_str())
+}
+
+pub fn server_display_name(id: u16) -> Option<&'static str> {
+    SERVERS
+        .iter()
+        .find(|server| server.id == id)
+        .map(|server| server.name.as_str())
 }
 
 pub fn info_url(character_id: &str, server_id: u16) -> String {
@@ -532,16 +562,31 @@ mod tests {
     }
 
     #[test]
-    fn a_fuzzy_search_only_yields_exact_names() {
+    fn a_fuzzy_search_only_yields_exact_names_and_prefers_the_same_capitals() {
+        // Six people are spelled Tails, seven if capitals are ignored, and there is a
+        // lowercase "tails" on Nania who is somebody else. Exact letters first, no
+        // Sixtails either way.
         let candidates = exact_candidates(&tails_payload(), "Tails");
-        assert_eq!(candidates.len(), 7, "one exact match per server, no Sixtails");
-        assert!(candidates.iter().all(|c| c.name.eq_ignore_ascii_case("Tails")));
+        assert_eq!(candidates.len(), 6, "the lowercase tails is a different spelling");
+        assert!(candidates.iter().all(|c| c.name == "Tails"));
+
+        // Asked for in lowercase, the lowercase name is the answer.
+        let lower = exact_candidates(&tails_payload(), "tails");
+        assert_eq!(lower.len(), 1);
+        assert_eq!(lower[0].server, "Nania");
+    }
+
+    fn chosen(candidates: &[Candidate], plan_result: Plan) -> Candidate {
+        match plan_result {
+            Plan::Use(index) => candidates[index].clone(),
+            other => panic!("expected a choice, got {other:?}"),
+        }
     }
 
     #[test]
     fn the_players_own_server_wins() {
         let candidates = exact_candidates(&tails_payload(), "Tails");
-        let picked = pick_candidate(&candidates, Some(2310)).expect("Hadala Tails");
+        let picked = chosen(&candidates, plan(&candidates, 2310, false, 0));
         assert_eq!(picked.server, "Hadala");
         assert_eq!(picked.level, 33);
     }
@@ -551,10 +596,10 @@ mod tests {
         // This is the report that started it: five level 45 players named Tails
         // on other servers, and Phernos had nobody of that name.
         let candidates = exact_candidates(&tails_payload(), "Tails");
-        assert_eq!(pick_candidate(&candidates, Some(1313)), None);
+        assert_eq!(plan(&candidates, 1313, false, 0), Plan::GiveUp);
 
         // With no idea which server we are on, it is no better.
-        assert_eq!(pick_candidate(&candidates, None), None);
+        assert_eq!(plan(&candidates, 9999, false, 0), Plan::GiveUp);
     }
 
     #[test]
@@ -564,7 +609,7 @@ mod tests {
             {"name": "<strong>Mikuwuu</strong>", "characterId": "y", "level": 12, "serverId": 1313, "serverName": "Phernos"}
         ]});
         let candidates = exact_candidates(&payload, "Mikuwu");
-        let picked = pick_candidate(&candidates, Some(1313)).expect("the only level 45 Mikuwu");
+        let picked = chosen(&candidates, plan(&candidates, 1313, false, 0));
         assert_eq!(picked.server, "Zikel");
     }
 
@@ -574,7 +619,7 @@ mod tests {
             {"name": "<strong>Lowbie</strong>", "characterId": "x", "level": 8, "serverId": 1313, "serverName": "Phernos"}
         ]});
         let candidates = exact_candidates(&payload, "Lowbie");
-        assert_eq!(pick_candidate(&candidates, Some(1313)).map(|c| c.level), Some(8));
+        assert_eq!(chosen(&candidates, plan(&candidates, 1313, false, 40)).level, 8);
     }
 
     fn candidate(name: &str, level: u32, server: u16, server_name: &str) -> Candidate {
@@ -612,12 +657,58 @@ mod tests {
         assert_eq!(plan(&names, 1313, false, 0), Plan::Use(1));
     }
 
+    fn search_result(name: &str, level: u32, server: u16, server_name: &str) -> serde_json::Value {
+        serde_json::json!({
+            "name": format!("<strong>{name}</strong>"),
+            "characterId": "abc%3D",
+            "serverId": server,
+            "serverName": server_name,
+            "level": level,
+            "race": 2
+        })
+    }
+
     #[test]
-    fn elyos_and_asmodian_servers_pair_by_their_last_two_digits() {
+    fn capitals_narrow_a_name_that_exists_in_several_case_variants() {
+        // The exact roster: the game said BeTeLGeuSe, and only Munin spells it that
+        // way. Ignoring case let a level 11 alt on our own server answer instead.
+        let payload = serde_json::json!({
+            "list": [
+                search_result("Betelgeuse", 11, 1313, "Phernos"),
+                search_result("BeTeLGeuSe", 45, 2313, "Munin"),
+                search_result("BETELGEUSE", 45, 2301, "Israphel")
+            ]
+        });
+        let found = exact_candidates(&payload, "BeTeLGeuSe");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].server, "Munin");
+    }
+
+    #[test]
+    fn a_name_with_no_capitals_in_common_still_matches() {
+        let payload = serde_json::json!({
+            "list": [search_result("Betelgeuse", 45, 2313, "Munin")]
+        });
+        let found = exact_candidates(&payload, "betelgeuse");
+        assert_eq!(found.len(), 1, "case is evidence, not a requirement");
+    }
+
+    #[test]
+    fn the_official_list_pairs_phernos_with_munin() {
         assert_eq!(paired_server(1313), Some(2313), "Phernos with Munin");
-        assert_eq!(paired_server(2313), Some(1313));
-        assert_eq!(paired_server(1), None, "not a four digit id");
-        assert_eq!(paired_server(9999), None, "no partner known");
+        assert_eq!(paired_server(2313), Some(1313), "and back again");
+        assert_eq!(paired_server(1310), Some(2310), "Nania with Hadala");
+        assert_eq!(server_short_name(2313), Some("MUN"));
+        assert_eq!(server_short_name(1313), Some("PHE"));
+        assert_eq!(paired_server(1), None, "not a server id");
+        assert_eq!(paired_server(9999), None, "not in the list");
+    }
+
+    #[test]
+    fn a_name_s_server_tag_can_be_looked_up() {
+        // The arena prints these, and they are what would settle a shared name.
+        assert_eq!(server_display_name(2301), Some("Israphel"));
+        assert_eq!(server_short_name(2301), Some("ISR"));
     }
 
     #[test]

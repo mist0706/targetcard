@@ -167,6 +167,19 @@ impl ScoreService {
     ) -> Option<GearScore> {
         let wanted_class = class.filter(|c| !c.trim().is_empty());
 
+        // Who shares this name, and how high are they: the line that would have made
+        // the Betelgeuse report obvious at a glance.
+        let mut roster: Vec<String> = candidates
+            .iter()
+            .map(|c| format!("{} {} {}", c.server, c.level, c.race.map_or("-".into(), |r| r.to_string())))
+            .collect();
+        roster.sort();
+        tracing::debug!(
+            "targetcard: {name}: {} exact match(es) [{}]",
+            candidates.len(),
+            roster.join(", ")
+        );
+
         // The player's own server first, but not blindly: a level 13 namesake on
         // our server must not shadow the level 45 opponent from another one, so
         // when the game showed us a class, the own-server candidate has to be
