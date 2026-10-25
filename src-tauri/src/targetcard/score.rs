@@ -119,9 +119,14 @@ pub fn strip_tags(value: &str) -> String {
     value.replace("<strong>", "").replace("</strong>", "").trim().to_string()
 }
 
+/// How many search rows to ask for. Twenty was the upstream default and it was
+/// silently truncating: a mixed-case "BeTeLGeuSe" on Munin sat at row 21 and the
+/// card answered with a level 11 namesake instead.
+pub const SEARCH_SIZE: usize = 100;
+
 pub fn search_url(keyword: &str, server_id: Option<u16>) -> String {
     let mut url = format!(
-        "{SEARCH_BASE}?keyword={}&page=1&size=20&localeInfo={LANG}&region={REGION_EU}",
+        "{SEARCH_BASE}?keyword={}&page=1&size={SEARCH_SIZE}&localeInfo={LANG}&region={REGION_EU}",
         encode(keyword)
     );
     if let Some(id) = server_id {
@@ -255,9 +260,10 @@ pub enum Plan {
 /// Names are not unique, and the arena is cross-server, so the order matters:
 ///
 /// 1. the player's own server, highest level first
-/// 2. a single candidate at all
-/// 3. a single candidate at arena level, since level 45 is the only way into a 5v5
-/// 4. several at arena level: only a class can settle it
+/// 2. the server paired with ours, which is where Abyss opponents come from
+/// 3. a single candidate at all
+/// 4. a single candidate at arena level, since level 45 is the only way into a 5v5
+/// 5. several at arena level: only a class can settle it
 ///
 /// `floor` is the lowest level worth considering, normally our own level minus a
 /// few. Names are shared across servers, and the one on your own server is often
@@ -292,6 +298,16 @@ pub fn plan(candidates: &[Candidate], local: u16, has_class: bool, floor: u32) -
     {
         return Plan::Use(index);
     }
+    if let Some(partner) = paired_server(local) {
+        if let Some(index) = plausible
+            .iter()
+            .copied()
+            .filter(|&i| candidates[i].server_id == partner)
+            .max_by_key(|&i| candidates[i].level)
+        {
+            return Plan::Use(index);
+        }
+    }
     if plausible.len() == 1 {
         return Plan::Use(plausible[0]);
     }
@@ -307,6 +323,26 @@ pub fn plan(candidates: &[Candidate], local: u16, has_class: bool, floor: u32) -
         return Plan::ByClass(arena.into_iter().take(6).collect());
     }
     Plan::GiveUp
+}
+
+/// The opposing-faction server paired with this one, when the ids follow the EU
+/// pattern: 13NN Elyos beside 23NN Asmodian, so Phernos 1313 with Munin 2313.
+///
+/// The pairing matters for the Abyss, where the people you meet are from the
+/// partner server. It also settled the case that started this: BeTeLGeuSe is a
+/// level 45 Cleric on Munin, and a level 11 alt on Phernos.
+pub fn paired_server(id: u16) -> Option<u16> {
+    let digits = id.to_string();
+    if digits.len() != 4 {
+        return None;
+    }
+    let (head, tail) = digits.split_at(2);
+    let partner = match head {
+        "13" => "23",
+        "23" => "13",
+        _ => return None,
+    };
+    format!("{partner}{tail}").parse().ok()
 }
 
 pub fn info_url(character_id: &str, server_id: u16) -> String {
@@ -574,6 +610,24 @@ mod tests {
             candidate("Kiria", 41, 1313, "Phernos"),
         ];
         assert_eq!(plan(&names, 1313, false, 0), Plan::Use(1));
+    }
+
+    #[test]
+    fn elyos_and_asmodian_servers_pair_by_their_last_two_digits() {
+        assert_eq!(paired_server(1313), Some(2313), "Phernos with Munin");
+        assert_eq!(paired_server(2313), Some(1313));
+        assert_eq!(paired_server(1), None, "not a four digit id");
+        assert_eq!(paired_server(9999), None, "no partner known");
+    }
+
+    #[test]
+    fn the_paired_server_answers_when_our_own_only_has_an_alt() {
+        let names = vec![
+            candidate("BeTeLGeuSe", 11, 1313, "Phernos"),
+            candidate("BeTeLGeuSe", 45, 2313, "Munin"),
+            candidate("BeTeLGeuSe", 45, 2304, "Lumiel"),
+        ];
+        assert_eq!(plan(&names, 1313, false, 40), Plan::Use(1), "Munin, the Cleric");
     }
 
     #[test]

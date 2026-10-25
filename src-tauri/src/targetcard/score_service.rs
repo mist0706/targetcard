@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::score::{
     exact_candidates, info_url, parse_score, plan, same_class, search_url, server_id, Candidate,
-    GearScore, Plan, ScoreReply, ORIGIN, REFERER,
+    GearScore, Plan, ScoreReply, ORIGIN, REFERER, SEARCH_SIZE,
 };
 
 const TTL_SECS: u64 = 6 * 3600;
@@ -136,6 +136,11 @@ impl ScoreService {
             .and_then(|list| list.as_array())
             .map(|list| list.len())
             .unwrap_or(0);
+        if rows >= SEARCH_SIZE {
+            tracing::warn!(
+                "targetcard: {name}: {rows} search rows came back, which is the whole page; a match may be beyond it"
+            );
+        }
         let candidates = exact_candidates(&payload, name);
         if candidates.is_empty() {
             tracing::debug!("targetcard: {name}: no exact match among {rows} search rows");
@@ -201,7 +206,7 @@ impl ScoreService {
             .cloned()
             .collect();
 
-        match plan(&rest, u16::MAX, wanted_class.is_some(), floor) {
+        match plan(&rest, local, wanted_class.is_some(), floor) {
             Plan::Use(index) => {
                 let candidate = &rest[index];
                 tracing::debug!(
@@ -361,29 +366,28 @@ mod tests {
         assert_eq!(result.reason, "no_server", "an unknown server is not an ambiguity");
     }
 
-    /// Against the live API, the case that produced a 5,333: a level 11 namesake on
-    /// our own server, and the level 45 Asmodians who could actually have done it.
-    /// Ignored by default because it needs the network; run with
+    /// Against the live API, the case that produced a 5,333 and then a dash.
+    ///
+    /// The player was killed by BeTeLGeuSe and the card said 5,333, which is a level
+    /// 11 Gladiator alt on Phernos. The character who did it is on Munin, the server
+    /// paired with Phernos, and is a level 45 Cleric. Two reasons it was missed: the
+    /// search only asked for 20 rows and this name was row 21, and the own-server
+    /// preference outranked level. Ignored by default, needs the network:
     /// `cargo test -- --ignored betelgeuse`.
     #[test]
     #[ignore]
-    fn betelgeuse_is_not_the_level_eleven_alt_on_our_server() {
+    fn the_betelgeuse_who_killed_was_the_cleric_on_the_paired_server() {
         let mut service = ScoreService::new(&scratch_dir());
-        let without_floor = tauri::async_runtime::block_on(service.lookup(
-            "BeTeLGeuSe",
-            "Phernos",
-            None,
-            None,
-        ));
-        let with_floor = tauri::async_runtime::block_on(service.lookup(
+        let reply = tauri::async_runtime::block_on(service.lookup(
             "BeTeLGeuSe",
             "Phernos",
             None,
             Some(40),
         ));
-        println!("no floor: {:?}", without_floor);
-        println!("floor 40: {:?}", with_floor);
-        assert_eq!(with_floor.reason, "ambiguous");
-        assert!(with_floor.score.is_none());
+        println!("floor 40: {:?}", reply);
+        let score = reply.score.expect("the Cleric on Munin");
+        assert_eq!(score.server, "Munin");
+        assert_eq!(score.class_name.as_deref(), Some("Cleric"));
+        assert_eq!(score.combat_power, Some(136_271));
     }
 }
