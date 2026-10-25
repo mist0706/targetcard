@@ -3269,6 +3269,15 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            // A panic in a Rust app leaves Windows with a vanished window and no
+            // record of why. Log it, so the next one is readable instead of
+            // inferred from silence in the log.
+            let default_hook = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                tracing::error!("panic: {info}");
+                default_hook(info);
+            }));
+
             // Resolve data directory
             let app_data_dir = app.path().app_data_dir()
                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
