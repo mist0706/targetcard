@@ -504,6 +504,11 @@ pub struct DataStorage {
     /// lock, as `abnormals`: fed by its own records, read when a fight is
     /// saved.
     stagger: Mutex<StaggerLog>,
+    /// When each known player last appeared in traffic, so a table can drop
+    /// people who have left. Its own lock: the parser writes this a few dozen
+    /// times a second and readers of `inner` should not queue behind it. Never
+    /// held at the same time as `inner`, which is what keeps the order fixed.
+    entity_seen: Mutex<HashMap<i32, i64>>,
 }
 
 /// The timeline and when it was last pruned.
@@ -833,6 +838,7 @@ impl DataStorage {
             before_reset: RwLock::new(None),
             abnormals: Mutex::new(AbnormalLog { timeline: abnormal::Timeline::default(), pruned_ms: NEVER_MS }),
             stagger: Mutex::new(StaggerLog::default()),
+            entity_seen: Mutex::new(HashMap::new()),
         }
     }
 
@@ -1848,10 +1854,40 @@ impl DataStorage {
     /// `Inner::despawned_summon_ids`. A stagger window open on it is missed.
     pub fn note_despawn(&self, id: i32) {
         self.stagger.lock().note_gone(id, now_ms(), false);
-        let mut inner = self.inner.write();
-        if inner.summon_storage.contains_key(&id) {
-            inner.despawned_summon_ids.insert(id);
+        {
+            let mut inner = self.inner.write();
+            if inner.summon_storage.contains_key(&id) {
+                inner.despawned_summon_ids.insert(id);
+            }
         }
+        // The game said it is gone: stop showing it in a players table at once,
+        // rather than waiting for a timeout.
+        self.forget_entity(id);
+    }
+
+    /// Note that `id` was just seen in traffic. Only players are tracked: a mob
+    /// is one of hundreds and never reaches a card.
+    pub fn note_entity_seen(&self, id: i32) {
+        let known = {
+            let inner = self.inner.read();
+            inner.nickname_storage.contains_key(&id) || inner.known_player_ids.contains(&id)
+        };
+        if !known {
+            return;
+        }
+        self.entity_seen.lock().insert(id, now_ms());
+    }
+
+    /// When this entity was last seen, in clock ms. `None` means no traffic
+    /// since it was named, or since it was forgotten.
+    pub fn entity_last_seen(&self, id: i32) -> Option<i64> {
+        self.entity_seen.lock().get(&id).copied()
+    }
+
+    /// The entity left the world, or the zone changed under it. The name binding
+    /// stays, because the meter relies on it across teleports; only presence goes.
+    pub fn forget_entity(&self, id: i32) {
+        self.entity_seen.lock().remove(&id);
     }
 
     pub fn is_entity_dead(&self, entity_id: i32) -> bool {
@@ -2087,6 +2123,9 @@ impl DataStorage {
     /// A zone load named the map it loads (`21 36`). The map, once known, is
     /// what says where the player is; see `dungeon_of_map`.
     pub fn note_map_load(&self, map_id: i32) {
+        // A load puts us somewhere else: nobody in a players table was here a
+        // moment ago. Cleared before the write lock, never under it.
+        self.entity_seen.lock().clear();
         let mut inner = self.inner.write();
         // A load hands out new entity ids: counts of the old ones would name
         // an entity that is gone.
@@ -2230,10 +2269,15 @@ impl DataStorage {
     /// "BaroqueWorks" to that player, and the "don't replace a longer name with a
     /// short ASCII one" rule then refused their actual name, "M7".
     pub fn append_nickname_authoritative(&self, uid: i32, nickname: &str) {
-        let mut inner = self.inner.write();
-        inner.authoritative_name_ids.insert(uid);
-        append_nickname_inner_with_force(&mut inner, uid, nickname, true);
-        rebind_roster_after_naming(&mut inner, nickname);
+        {
+            let mut inner = self.inner.write();
+            inner.authoritative_name_ids.insert(uid);
+            append_nickname_inner_with_force(&mut inner, uid, nickname, true);
+            rebind_roster_after_naming(&mut inner, nickname);
+        }
+        // Being named is the first sighting: the table should show them before
+        // their first state packet arrives.
+        self.note_entity_seen(uid);
     }
 
     pub fn set_permanent_nickname(&self, uid: i32, nickname: &str) {

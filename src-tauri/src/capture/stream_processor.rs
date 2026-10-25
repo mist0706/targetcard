@@ -256,6 +256,33 @@ impl StreamProcessor {
         self.pending_compact_skill_context = None;
     }
 
+    /// Record that the entity this frame is about is still in the world.
+    ///
+    /// The client re-sends state frames (`xx 37`) and combat/stat frames
+    /// (`xx 38`) for every entity it can see, and the first field of both is
+    /// that entity. Presence is what lets a players table drop someone who
+    /// walked away at the moment they leave, instead of guessing with a timeout
+    /// that either lags by a minute or drops people still standing there.
+    fn note_entity_activity(&self, packet: &[u8]) {
+        let length = read_varint(packet, 0);
+        if length.length <= 0 {
+            return;
+        }
+        let offset = length.length as usize;
+        if offset + 2 >= packet.len() {
+            return;
+        }
+        let family = packet[offset + 1];
+        if family != 0x37 && family != 0x38 {
+            return;
+        }
+        let id = read_varint(packet, offset + 2);
+        if id.length <= 0 {
+            return;
+        }
+        self.data_storage.note_entity_seen(id.value as i32);
+    }
+
     fn parse_perfect_packet(&mut self, packet: &[u8]) -> bool {
         if packet.len() < 3 {
             return false;
@@ -263,6 +290,9 @@ impl StreamProcessor {
 
         // Plugin decoders (`crate::plugins`); nothing when none is loaded.
         crate::capture::frame_tap::frame(packet);
+
+        // Who is still around. Cheap: a handful of bytes and a set lookup.
+        self.note_entity_activity(packet);
 
         // Buffs, debuffs and stats, recorded alongside (see `capture::abnormal`).
         self.data_storage.note_abnormal_packet(packet);

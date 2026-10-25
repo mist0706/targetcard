@@ -28,6 +28,9 @@ pub struct PlayerCard {
     pub name: String,
     pub class: Option<JobClass>,
     pub is_self: bool,
+    /// True when the party roster names this player. A party member stays in a
+    /// table even while standing still, because being in the group is the point.
+    pub in_party: bool,
     /// Filled in from the party roster when the game states it, so a party
     /// member's card needs no web lookup at all.
     pub level: Option<u32>,
@@ -62,6 +65,7 @@ pub fn build_cards(
                 name,
                 class: jobs.get(&id).copied(),
                 is_self: self_id == Some(id),
+                in_party: false,
                 level: None,
                 gear_score: None,
                 combat_power: None,

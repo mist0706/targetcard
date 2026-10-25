@@ -38,6 +38,23 @@ pub struct TargetSnapshot {
 /// How many arrivals the table shows.
 pub const RECENT_LIMIT: usize = 10;
 
+/// How long a player stays in the table without producing any traffic.
+///
+/// The game re-sends state for anyone it can see, several times a second, so a
+/// player who is still there keeps refreshing this. Thirty seconds is long
+/// enough to survive a quiet moment and short enough that the person who walked
+/// past while you were reading a quest text is gone by the time you look up.
+pub const PRESENCE_TTL_MS: i64 = 30_000;
+
+/// Is this player still around? Party members always are: they are in the group
+/// even when they are on the other side of the zone producing no traffic.
+fn is_present(storage: &DataStorage, card: &PlayerCard, now: i64) -> bool {
+    card.in_party
+        || storage
+            .entity_last_seen(card.entity_id)
+            .is_some_and(|at| now.saturating_sub(at) <= PRESENCE_TTL_MS)
+}
+
 /// The most recently appeared players, newest first.
 ///
 /// Entity ids are handed out in spawn order, so the highest ids are the latest
@@ -100,6 +117,7 @@ pub fn snapshot(storage: &DataStorage) -> TargetSnapshot {
     .into_iter()
     .map(|mut card| {
         if let Some(member) = party.get(&card.name) {
+            card.in_party = true;
             card.level = Some(member.level.max(0) as u32);
             card.gear_score = (member.gear_score > 0).then_some(member.gear_score);
             card.combat_power = (member.combat_power > 0).then_some(member.combat_power);
@@ -111,7 +129,13 @@ pub fn snapshot(storage: &DataStorage) -> TargetSnapshot {
     })
     .collect();
     let focus_entity_id = focus_entity(storage, &cards);
-    let recent = recent_players(&cards, RECENT_LIMIT);
+    let now = crate::clock::now_ms();
+    let visible: Vec<PlayerCard> = cards
+        .iter()
+        .filter(|card| is_present(storage, card, now))
+        .cloned()
+        .collect();
+    let recent = recent_players(&visible, RECENT_LIMIT);
     let server_name = storage
         .local_character_name()
         .map(|name| storage.player_server(&name))
@@ -152,6 +176,48 @@ mod tests {
         // The newest arrival is first, so the oldest five must have fallen off.
         assert_eq!(recent[0].name, "P114");
         assert_eq!(recent[RECENT_LIMIT - 1].name, "P105");
+    }
+
+    #[test]
+    fn a_player_who_produces_no_traffic_leaves_the_table() {
+        let storage = DataStorage::new();
+        storage.append_nickname_authoritative(4715, "Miku");
+        storage.append_nickname_authoritative(4716, "Alpha");
+        assert_eq!(snapshot(&storage).recent.len(), 2);
+
+        // What note_despawn does when the game says the entity is gone.
+        storage.forget_entity(4715);
+
+        let names: Vec<String> = snapshot(&storage)
+            .recent
+            .into_iter()
+            .map(|card| card.name)
+            .collect();
+        assert_eq!(names, vec!["Alpha"]);
+    }
+
+    #[test]
+    fn a_party_member_stays_without_traffic() {
+        use crate::combat::data_storage::PartyMember;
+
+        let storage = DataStorage::new();
+        storage.append_nickname_authoritative(4715, "Miku");
+        storage.append_nickname_authoritative(4716, "Alpha");
+        storage.set_party_roster(
+            vec![(
+                "Miku".to_string(),
+                PartyMember { slot: 1, level: 45, ..Default::default() },
+            )],
+            true,
+        );
+        storage.forget_entity(4715);
+
+        let names: Vec<String> = snapshot(&storage)
+            .recent
+            .into_iter()
+            .map(|card| card.name)
+            .collect();
+        assert_eq!(names, vec!["Alpha", "Miku"]);
     }
 
     #[test]
