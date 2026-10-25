@@ -75,14 +75,44 @@ impl ScoreService {
     }
 
     /// Score for one character: cache, then search, then info.
+    ///
+    /// Every failure path logs why, because from the outside a missing combat
+    /// power is indistinguishable between "the API has no such character", "the
+    /// request never completed" and "the response changed shape". Those need
+    /// different answers, and the log is the only place to tell them apart.
     pub async fn lookup(&mut self, name: &str, server: &str) -> Option<GearScore> {
+        let started = std::time::Instant::now();
         if let Some(hit) = self.cached(name, server) {
+            tracing::debug!("targetcard: {name}@{server} cache hit");
             return Some(hit);
         }
-        let id = server_id(server)?;
-        let character_id = self.find_character_id(name, id).await?;
-        let payload = self.get_json(&info_url(&character_id, id)).await?;
-        let score = parse_score(&payload)?;
+        let Some(id) = server_id(server) else {
+            tracing::warn!("targetcard: {name}: unknown server '{server}', nothing to look up");
+            return None;
+        };
+        let Some(character_id) = self.find_character_id(name, id).await else {
+            tracing::warn!(
+                "targetcard: {name}@{server}: search found no character ({:?})",
+                started.elapsed()
+            );
+            return None;
+        };
+        let Some(payload) = self.get_json(&info_url(&character_id, id)).await else {
+            tracing::warn!(
+                "targetcard: {name}@{server}: character info request failed ({:?})",
+                started.elapsed()
+            );
+            return None;
+        };
+        let Some(score) = parse_score(&payload) else {
+            tracing::warn!("targetcard: {name}@{server}: response carried no score");
+            return None;
+        };
+        tracing::debug!(
+            "targetcard: {name}@{server} -> CP {:?} in {:?}",
+            score.combat_power,
+            started.elapsed()
+        );
         self.cache.insert(
             Self::key(server, name),
             Cached { score: score.clone(), at: now_secs() },
