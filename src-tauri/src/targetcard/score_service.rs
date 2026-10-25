@@ -334,6 +334,7 @@ mod tests {
         // No client call can happen here: server_id returns None first.
         let mut service = ScoreService::new(&scratch_dir());
         let result = tauri::async_runtime::block_on(service.lookup("Sins", "Nowhere", None));
-        assert!(result.is_none());
+        assert!(result.score.is_none());
+        assert_eq!(result.reason, "no_server", "an unknown server is not an ambiguity");
     }
 }
