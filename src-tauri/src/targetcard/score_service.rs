@@ -14,8 +14,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use super::score::{
-    exact_candidates, info_url, parse_score, same_class, search_url, server_id,
-    Candidate, GearScore, ORIGIN, REFERER,
+    exact_candidates, info_url, parse_score, plan, same_class, search_url, server_id, Candidate,
+    GearScore, Plan, ORIGIN, REFERER,
 };
 
 const TTL_SECS: u64 = 6 * 3600;
@@ -137,18 +137,24 @@ impl ScoreService {
         started: std::time::Instant,
         candidates: &[Candidate],
     ) -> Option<GearScore> {
+        let wanted_class = class.filter(|c| !c.trim().is_empty());
+
         // The player's own server first, but not blindly: a level 13 namesake on
-        // our server must not shadow the level 45 opponent from another one. When
-        // the game showed us a class, the own-server candidate has to be that
-        // class to win, which costs one request and settles Althea-type cases.
-        if let Some(candidate) = candidates.iter().filter(|c| c.server_id == local).max_by_key(|c| c.level).cloned() {
-            if let Some(score) = self.score_of(&candidate, started).await {
-                let agrees = match class {
-                    Some(wanted) if !wanted.trim().is_empty() => score
+        // our server must not shadow the level 45 opponent from another one, so
+        // when the game showed us a class, the own-server candidate has to be
+        // that class. One extra request, and it settles the Althea case.
+        if let Some(candidate) = candidates
+            .iter()
+            .filter(|c| c.server_id == local)
+            .max_by_key(|c| c.level)
+        {
+            if let Some(score) = self.score_of(candidate, started).await {
+                let agrees = match wanted_class {
+                    Some(wanted) => score
                         .class_name
                         .as_deref()
-                        .is_some_and(|name| same_class(name, wanted)),
-                    _ => true,
+                        .is_some_and(|have| same_class(have, wanted)),
+                    None => true,
                 };
                 if agrees {
                     tracing::debug!(
@@ -159,57 +165,70 @@ impl ScoreService {
                     return Some(score);
                 }
                 tracing::debug!(
-                    "targetcard: {name}: {} on our server is a {:?}, not a {class:?}; looking across servers",
+                    "targetcard: {name}: {} on our server is a {:?}, not a {wanted_class:?}; looking across servers",
                     candidate.name,
                     score.class_name
                 );
             }
         }
 
-        let Some(class) = class.filter(|c| !c.trim().is_empty()) else {
-            tracing::warn!(
-                "targetcard: {name}: {} exact matches and no class to tell them apart; not guessing",
-                candidates.len()
-            );
-            return None;
-        };
+        let rest: Vec<Candidate> = candidates
+            .iter()
+            .filter(|c| c.server_id != local)
+            .cloned()
+            .collect();
 
-        // Ambiguous name: ask about the arena-level candidates and keep the one
-        // whose class is the class the game showed. At most six, once per name
-        // per six hours, because the answer is cached like any other.
-        let mut matched: Vec<GearScore> = Vec::new();
-        for candidate in candidates.iter().filter(|c| c.level >= 40).take(6) {
-            let Some(score) = self.score_of(candidate, started).await else {
-                continue;
-            };
-            if score
-                .class_name
-                .as_deref()
-                .is_some_and(|name| same_class(name, class))
-            {
-                matched.push(score);
-            }
-        }
-        match matched.len() {
-            1 => {
-                let score = matched.pop()?;
+        match plan(&rest, u16::MAX, wanted_class.is_some()) {
+            Plan::Use(index) => {
+                let candidate = &rest[index];
                 tracing::debug!(
-                    "targetcard: {name} -> {} ({}) chosen by class {class}",
-                    score.name,
-                    score.server
+                    "targetcard: {name} -> {} ({}) settled by level",
+                    candidate.name,
+                    candidate.server
                 );
-                Some(score)
+                self.score_of(candidate, started).await
             }
-            0 => {
+            Plan::ByClass(indexes) => {
+                let Some(wanted) = wanted_class else {
+                    return None;
+                };
+                let mut matched: Vec<GearScore> = Vec::new();
+                for index in indexes {
+                    let candidate = &rest[index];
+                    let Some(score) = self.score_of(candidate, started).await else {
+                        continue;
+                    };
+                    if score
+                        .class_name
+                        .as_deref()
+                        .is_some_and(|have| same_class(have, wanted))
+                    {
+                        matched.push(score);
+                    }
+                }
+                match matched.len() {
+                    1 => {
+                        let score = matched.pop()?;
+                        tracing::debug!(
+                            "targetcard: {name} -> {} ({}) chosen by class {wanted}",
+                            score.name,
+                            score.server
+                        );
+                        Some(score)
+                    }
+                    count => {
+                        tracing::warn!(
+                            "targetcard: {name}: {count} of {} matches are a {wanted} as well; not guessing",
+                            rest.len()
+                        );
+                        None
+                    }
+                }
+            }
+            Plan::GiveUp => {
                 tracing::warn!(
-                    "targetcard: {name}: {} exact matches, none of them a {class}",
+                    "targetcard: {name}: {} exact matches and nothing to tell them apart; not guessing",
                     candidates.len()
-                );
-                None
-            }
-            n => {
-                tracing::warn!(
-                    "targetcard: {name}: {n} matches are a {class} as well; not guessing"
                 );
                 None
             }

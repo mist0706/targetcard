@@ -213,6 +213,59 @@ pub fn same_class(a: &str, b: &str) -> bool {
     !a.trim().is_empty() && norm(a) == norm(b)
 }
 
+/// What to do with a set of exact name matches.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Plan {
+    /// One candidate is the player: ask about this index.
+    Use(usize),
+    /// Several could be: these indexes (arena level) need their class checked.
+    ByClass(Vec<usize>),
+    /// Nothing sensible to do without more information.
+    GiveUp,
+}
+
+/// Decide what a set of exact name matches means.
+///
+/// Names are not unique, and the arena is cross-server, so the order matters:
+///
+/// 1. the player's own server, highest level first
+/// 2. a single candidate at all
+/// 3. a single candidate at arena level, since level 45 is the only way into a 5v5
+/// 4. several at arena level: only a class can settle it
+///
+/// Rule 2 is not a detail. Without it a name with one match anywhere in EU came
+/// back as a dash, which is how an entire arena roster turned into dashes.
+pub fn plan(candidates: &[Candidate], local: u16, has_class: bool) -> Plan {
+    if candidates.is_empty() {
+        return Plan::GiveUp;
+    }
+    if let Some((index, _)) = candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.server_id == local)
+        .max_by_key(|(_, c)| c.level)
+    {
+        return Plan::Use(index);
+    }
+    if candidates.len() == 1 {
+        return Plan::Use(0);
+    }
+    let mut arena: Vec<usize> = candidates
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.level >= 40)
+        .map(|(index, _)| index)
+        .collect();
+    arena.sort_by_key(|&index| std::cmp::Reverse(candidates[index].level));
+    if arena.len() == 1 {
+        return Plan::Use(arena[0]);
+    }
+    if arena.len() > 1 && has_class {
+        return Plan::ByClass(arena.into_iter().take(6).collect());
+    }
+    Plan::GiveUp
+}
+
 pub fn info_url(character_id: &str, server_id: u16) -> String {
     format!(
         "{INFO_BASE}?lang={LANG}&characterId={}&serverId={server_id}&region={REGION_EU}",
@@ -440,5 +493,49 @@ mod tests {
         ]});
         let candidates = exact_candidates(&payload, "Lowbie");
         assert_eq!(pick_candidate(&candidates, Some(1313)).map(|c| c.level), Some(8));
+    }
+
+    fn candidate(name: &str, level: u32, server: u16, server_name: &str) -> Candidate {
+        Candidate {
+            name: name.to_string(),
+            character_id: format!("id-{server_name}"),
+            server_id: server,
+            server: server_name.to_string(),
+            level,
+        }
+    }
+
+    #[test]
+    fn one_match_anywhere_is_the_answer_even_with_no_class() {
+        let only = vec![candidate("7rameee", 45, 2321, "Agnita")];
+        assert_eq!(plan(&only, 1313, false), Plan::Use(0));
+    }
+
+    #[test]
+    fn one_arena_level_match_settles_a_shared_name() {
+        let names = vec![
+            candidate("Merum", 12, 1310, "Nania"),
+            candidate("Merum", 45, 2313, "Munin"),
+        ];
+        assert_eq!(plan(&names, 1313, false), Plan::Use(1));
+    }
+
+    #[test]
+    fn our_own_server_wins_over_a_higher_level_elsewhere() {
+        let names = vec![
+            candidate("Kiria", 45, 2312, "Ulgorn"),
+            candidate("Kiria", 41, 1313, "Phernos"),
+        ];
+        assert_eq!(plan(&names, 1313, false), Plan::Use(1));
+    }
+
+    #[test]
+    fn several_arena_level_matches_need_a_class() {
+        let names = vec![
+            candidate("Kar", 45, 2312, "Ulgorn"),
+            candidate("Kar", 45, 2302, "Zikel"),
+        ];
+        assert_eq!(plan(&names, 1313, false), Plan::GiveUp);
+        assert_eq!(plan(&names, 1313, true), Plan::ByClass(vec![0, 1]));
     }
 }
