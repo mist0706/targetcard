@@ -297,6 +297,16 @@ fn main() {
         // A short wait keeps the loop responsive to `q` without busy-spinning.
         match rx.try_recv() {
             Ok(payload) => {
+                // Only the game's own port. The capturer can hand over other flows
+                // on the same device, and a capture that carries someone's browser
+                // traffic is not something to upload.
+                let game_port = port_detector.current_port();
+                let on_game_port = game_port
+                    .is_some_and(|port| payload.src_port == port || payload.dst_port == port);
+                if !on_game_port {
+                    let _ = forward_tx.try_send(payload);
+                    continue;
+                }
                 let line = capture_line(payload.captured_at_ms, &stream_key(&payload), &payload.data);
                 if out.write_all(line.as_bytes()).is_ok() {
                     payloads.fetch_add(1, Ordering::Relaxed);
