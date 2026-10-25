@@ -3278,6 +3278,14 @@ pub fn run() {
                 default_hook(info);
             }));
 
+            // Which process this is: two instances of a single-instance app both
+            // writing one log looked exactly like one process going quiet.
+            tracing::info!(
+                "started: pid {} version {}",
+                std::process::id(),
+                env!("CARGO_PKG_VERSION")
+            );
+
             // Resolve data directory
             let app_data_dir = app.path().app_data_dir()
                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
