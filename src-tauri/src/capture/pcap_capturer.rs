@@ -436,6 +436,13 @@ impl PcapCapturer {
         let devices: Vec<_> = devices
             .into_iter()
             .filter(|d| d.has_addresses && !crate::platform::pcap::skip_device(&d.name))
+            // Never the loopback adapter. AION 2 does not speak over loopback, and
+            // on Windows this device is listed first because it counts as virtual,
+            // so it is the first one opened — on a machine where opening it took
+            // the process down before any physical adapter was ever started, that
+            // also meant capturing nothing at all. A device the player picks by
+            // hand is still honoured.
+            .filter(|d| !d.is_loopback)
             .collect();
 
         if devices.is_empty() {
