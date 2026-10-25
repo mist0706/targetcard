@@ -43,6 +43,9 @@ pub fn config_path(app_data_dir: &Path) -> PathBuf {
 /// The collector configuration, if this install has one.
 pub fn load(app_data_dir: &Path) -> Option<CollectorConfig> {
     let raw = std::fs::read_to_string(config_path(app_data_dir)).ok()?;
+    // Windows editors and PowerShell's Set-Content can leave a byte-order mark,
+    // which JSON does not allow and serde will not skip.
+    let raw = raw.trim_start_matches('\u{feff}');
     match serde_json::from_str::<CollectorConfig>(&raw) {
         Ok(config) if !config.upload_url.trim().is_empty() && !config.token.trim().is_empty() => {
             Some(config)
@@ -206,6 +209,18 @@ mod tests {
         let zipped = gzip(&text).unwrap();
         assert!(zipped.len() < text.len() / 2, "gzip should shrink a log tail");
         assert_eq!(&zipped[..2], &[0x1f, 0x8b]);
+    }
+
+    #[test]
+    fn a_config_with_a_byte_order_mark_still_loads() {
+        let dir = temp_dir("bom");
+        std::fs::write(
+            config_path(&dir),
+            format!("\u{feff}{{\"upload_url\":\"http://x\",\"token\":\"t\"}}"),
+        )
+        .unwrap();
+        assert!(load(&dir).is_some(), "a BOM must not disable uploads");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
