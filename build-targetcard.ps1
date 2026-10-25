@@ -39,6 +39,10 @@
 .PARAMETER BuildOnly
     Build without checking or installing anything.
 
+.PARAMETER Rebuild
+    Compile even when this exact commit is already built here. The default skips
+    the compile when nothing changed, which is what makes re-running cheap.
+
 .PARAMETER NoInstall
     Build but do not install. Without this the MSI is installed (or upgraded) at
     the end, which is the normal path: a newer version replaces the old one.
@@ -67,6 +71,7 @@ param(
     [switch]$SetupOnly,
     [switch]$BuildOnly,
     [switch]$Force,
+    [switch]$Rebuild,
     [switch]$NoInstall,
     [switch]$Uninstall,
     [string]$CollectorUrl = "http://10.7.1.235:8791",
@@ -75,7 +80,7 @@ param(
 
 # Bumped whenever this script changes, and printed, so a stale copy in Downloads
 # or %TEMP% says so instead of failing on a parameter it has never heard of.
-$ScriptStamp = "2026-10-25T12:40Z"
+$ScriptStamp = "2026-10-25T16:20Z"
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"      # speeds up Invoke-WebRequest a lot
@@ -382,9 +387,8 @@ function Show-SourceFingerprint([string]$Zip, $Source, $Build) {
     if ($Source -and $Source.Sha) {
         $stamp = Join-Path $WorkDir ".last-build-commit"
         if ((Test-Path $stamp) -and ((Get-Content $stamp -Raw).Trim() -eq $Source.Sha)) {
-            Write-Warn2 "Same commit as your last build. Nothing new upstream."
+            Write-Warn2 "Same commit as the last build on this machine."
         }
-        Set-Content -Path $stamp -Value $Source.Sha -NoNewline
     }
     return [pscustomobject]@{ Sha256 = $hash; Version = $version; NpmVersion = $pkgVersion; Card = $card }
 }
@@ -478,6 +482,24 @@ if ($ZipPath) {
     $source = Get-SourceArchive
 }
 
+# The equivalent of a cached Docker layer: if this exact commit was already
+# compiled here and the MSI it produced is still on disk, there is nothing to
+# compile. Cargo keeps `target` between runs, so a real change costs one crate,
+# not the dependency tree; this skips even that when there is no change at all.
+$stampPath = Join-Path $WorkDir ".last-build-commit"
+$builtSha = if (Test-Path $stampPath) { (Get-Content $stampPath -Raw).Trim() } else { "" }
+$existingMsi = Get-ChildItem (Join-Path $WorkDir "src-tauri\target\release\bundle\msi\*.msi") -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$skipBuild = (-not $Rebuild) -and $source.Sha -and ($builtSha -eq $source.Sha) -and $existingMsi
+
+if ($skipBuild) {
+    Write-Step "Compile skipped"
+    Write-Ok ("commit " + $source.Sha.Substring(0, 12) + " is already built on this machine")
+    Write-Ok ("MSI: " + $existingMsi.FullName)
+    Write-Host "   Pass -Rebuild to compile it again anyway." -ForegroundColor Yellow
+    $fingerprint = $null
+    $msi = $existingMsi
+} else {
 Expand-Source $source.Path
 $buildVersion = Set-BuildVersion
 $fingerprint = Show-SourceFingerprint $source.Path $source $buildVersion
@@ -501,20 +523,24 @@ try {
     Pop-Location
 }
 
-Write-Step "Result"
 $msi = Get-ChildItem (Join-Path $WorkDir "src-tauri\target\release\bundle\msi\*.msi") -ErrorAction SilentlyContinue |
        Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (-not $msi) { throw "build finished but no MSI was produced; check the output above" }
+# Only now is this commit really built here, so only now does the stamp say so.
+if ($source.Sha) { [IO.File]::WriteAllText($stampPath, $source.Sha) }
+}
+
+Write-Step "Result"
 $hash = (Get-FileHash $msi.FullName -Algorithm SHA256).Hash
 Write-Ok ("MSI:    " + $msi.FullName)
 Write-Ok ("size:   " + [math]::Round($msi.Length / 1MB, 1) + " MB")
 Write-Ok ("sha256: " + $hash)
-$built = "version " + $fingerprint.Version + ", card code " + $fingerprint.Card
+$built = if ($fingerprint) { "version " + $fingerprint.Version + ", card code " + $fingerprint.Card } else { "reused build" }
 if ($source.Sha) { $built = "commit " + $source.Sha.Substring(0, 12) + ", " + $built }
 Write-Host ("`n   Built " + $built) -ForegroundColor Yellow
 Write-Host "   The build is unsigned, so SmartScreen will warn on first run." -ForegroundColor Yellow
 Write-Host "   Install Npcap (Wireshark) if you have not, then run the app as Administrator." -ForegroundColor Yellow
-if ($fingerprint.Card -ne "present") {
+if ($fingerprint -and $fingerprint.Card -ne "present") {
     Write-Host "   That build has no target card in it." -ForegroundColor Red
 }
 
