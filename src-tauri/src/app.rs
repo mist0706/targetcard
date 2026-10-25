@@ -1260,8 +1260,20 @@ fn set_language(app: tauri::AppHandle, state: tauri::State<'_, AppState>, langua
 
 #[tauri::command]
 fn set_debug_logging(state: tauri::State<'_, AppState>, enabled: bool) {
-    logging::logger::set_debug_enabled(enabled, &state.app_data_dir);
-    state.settings.set("dpsMeter.debugLoggingEnabled", if enabled { "true" } else { "false" });
+    // The meter view pushes its saved preference through here on every start,
+    // and that preference defaults to off. With a diagnostics collector
+    // configured, honouring it silenced the very log the collector uploads: the
+    // file stopped forty milliseconds after launch, heartbeat and all, and an app
+    // that was alive and healthy looked dead from the outside.
+    let forced = crate::diagnostics::load(&state.app_data_dir).is_some();
+    let effective = enabled || forced;
+    logging::logger::set_debug_enabled(effective, &state.app_data_dir);
+    state
+        .settings
+        .set("dpsMeter.debugLoggingEnabled", if effective { "true" } else { "false" });
+    if forced && !enabled {
+        tracing::info!("diagnostics: file logging stays on while a collector is configured");
+    }
 }
 
 #[tauri::command]
