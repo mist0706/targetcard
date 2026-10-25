@@ -39,6 +39,13 @@
 .PARAMETER BuildOnly
     Build without checking or installing anything.
 
+.PARAMETER NoInstall
+    Build but do not install. Without this the MSI is installed (or upgraded) at
+    the end, which is the normal path: a newer version replaces the old one.
+
+.PARAMETER Uninstall
+    Remove an installed targetcard and stop.
+
 .PARAMETER Force
     Re-unpack the source even if WorkDir already exists (your build output in
     src-tauri\target is preserved).
@@ -51,7 +58,9 @@ param(
     [string]$WorkDir = "C:\targetcard",
     [switch]$SetupOnly,
     [switch]$BuildOnly,
-    [switch]$Force
+    [switch]$Force,
+    [switch]$NoInstall,
+    [switch]$Uninstall
 )
 
 $ErrorActionPreference = "Stop"
@@ -214,7 +223,101 @@ function Get-SourceArchive {
     return [pscustomobject]@{ Path = $out; Sha = $sha; Sha256 = $hash; Subject = $subject; When = $when }
 }
 
-function Show-SourceFingerprint([string]$Zip, $Source) {
+function Set-BuildVersion {
+    # Windows Installer only replaces an existing install when the version
+    # differs: the same version opens the repair dialog. Upstream bumps its own
+    # patch number a few times a day, which is exactly often enough to collide
+    # with a rebuild, so every build gets its own number here. The fork allows
+    # downgrades, so this only has to be *different*, never greater.
+    $days = [math]::Floor(((Get-Date).ToUniversalTime() - [datetime]'2026-10-01T00:00:00Z').TotalDays)
+    $build = 1000 + [int]$days * 40 + (Get-Date).ToUniversalTime().Hour
+    $version = "2.0.$build"
+
+    $conf = Join-Path $WorkDir "src-tauri\tauri.conf.json"
+    $text = Get-Content -Raw $conf
+    $upstream = "unknown"
+    $found = [regex]::Match($text, '"version"\s*:\s*"([^"]+)"')
+    if ($found.Success) { $upstream = $found.Groups[1].Value }
+    $stamped = [regex]::Replace($text, '"version"\s*:\s*"[^"]+"', ('"version": "' + $version + '"'), 1)
+    # [IO.File] keeps the file byte-for-byte apart from the version: no BOM, no
+    # extra newline, which a JSON parser would forgive but a diff would not.
+    if ($stamped -ne $text) { [IO.File]::WriteAllText($conf, $stamped) }
+
+    # Same number in Cargo.toml, so the "Compiling ... vX" line names the build.
+    $cargo = Join-Path $WorkDir "src-tauri\Cargo.toml"
+    $cargoText = Get-Content -Raw $cargo
+    $cargoStamped = [regex]::Replace($cargoText, '(?m)^version\s*=\s*"[^"]+"', ('version = "' + $version + '"'), 1)
+    if ($cargoStamped -ne $cargoText) { [IO.File]::WriteAllText($cargo, $cargoStamped) }
+
+    # And package.json, so npm's banner names the same build instead of the
+    # upstream patch number the source was cut from.
+    $pkg = Join-Path $WorkDir "package.json"
+    if (Test-Path $pkg) {
+        $pkgText = Get-Content -Raw $pkg
+        $pkgStamped = [regex]::Replace($pkgText, '"version"\s*:\s*"[^"]+"', ('"version": "' + $version + '"'), 1)
+        if ($pkgStamped -ne $pkgText) { [IO.File]::WriteAllText($pkg, $pkgStamped) }
+    }
+
+    return [pscustomobject]@{ Build = $version; Upstream = $upstream }
+}
+
+function Stop-RunningTargetcard {
+    # msiexec cannot replace files a running app holds open.
+    Get-Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -like "*\targetcard\*" } |
+        ForEach-Object {
+            Write-Host "   stopping $($_.ProcessName) ($($_.Id))"
+            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+        }
+    Start-Sleep -Milliseconds 400
+}
+
+function Get-InstalledTargetcard {
+    $roots = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    )
+    Get-ItemProperty $roots -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -like "targetcard*" -and $_.PSChildName -match '^\{' } |
+        Select-Object -First 1
+}
+
+function Uninstall-Targetcard {
+    Write-Step "Uninstall"
+    $app = Get-InstalledTargetcard
+    if (-not $app) { Write-Ok "nothing installed"; return }
+    Write-Ok ("removing " + $app.DisplayName + " " + $app.DisplayVersion)
+    Stop-RunningTargetcard
+    $code = $app.PSChildName
+    $log = Join-Path $env:TEMP "targetcard-uninstall.log"
+    $proc = Start-Process msiexec.exe -ArgumentList "/x", $code, "/qb", "/norestart", "/l*v", "`"$log`"" -Wait -PassThru
+    if ($proc.ExitCode -in 0, 3010) { Write-Ok "removed" }
+    else { Write-Warn2 ("uninstall exit code " + $proc.ExitCode + "; log " + $log) }
+}
+
+function Install-Msi([string]$Msi) {
+    Write-Step "Install"
+    $installed = Get-InstalledTargetcard
+    if ($installed) {
+        Write-Ok ("upgrading " + $installed.DisplayName + " " + $installed.DisplayVersion)
+        Stop-RunningTargetcard
+    } else {
+        Write-Ok "first install"
+    }
+    $log = Join-Path $env:TEMP "targetcard-install.log"
+    $proc = Start-Process msiexec.exe `
+        -ArgumentList "/i", "`"$Msi`"", "/qb", "/norestart", "/l*v", "`"$log`"" -Wait -PassThru
+    if ($proc.ExitCode -in 0, 3010) {
+        $now = Get-InstalledTargetcard
+        if ($now) { Write-Ok ("installed " + $now.DisplayVersion) } else { Write-Ok "installed" }
+    } else {
+        Write-Warn2 ("install exit code " + $proc.ExitCode + "; log " + $log)
+        Write-Warn2 "the MSI is still on disk, so it can be installed by hand"
+    }
+}
+
+function Show-SourceFingerprint([string]$Zip, $Source, $Build) {
     # Unpack, then state what is actually on disk. This is the last chance to
     # catch a wrong or stale tree before twenty minutes of compiling.
     Write-Step "Source check"
@@ -235,7 +338,8 @@ function Show-SourceFingerprint([string]$Zip, $Source) {
     $missing = @($cardFiles | Where-Object { -not (Test-Path (Join-Path $WorkDir $_)) })
     $card = if ($missing.Count -eq 0) { "present" } else { "MISSING" }
 
-    Write-Ok ("version:   cargo " + $version + "   npm " + $pkgVersion)
+    $upstream = if ($Build) { $Build.Upstream } else { "?" }
+    Write-Ok ("version:   " + $version + "  (upstream " + $upstream + ")   npm " + $pkgVersion)
     Write-Ok ("card code: " + $card)
     Write-Ok ("archive:   " + $hash.Substring(0, 16) + "...")
     if ($missing.Count -gt 0) {
@@ -293,6 +397,11 @@ function Expand-Source([string]$Zip) {
 
 Assert-Admin
 
+if ($Uninstall) {
+    Uninstall-Targetcard
+    return
+}
+
 if ($BuildOnly) {
     if (-not (Test-Cargo))  { throw "-BuildOnly needs cargo on PATH" }
     if (-not (Test-Node))   { throw "-BuildOnly needs node on PATH" }
@@ -327,7 +436,8 @@ if ($ZipPath) {
 }
 
 Expand-Source $source.Path
-$fingerprint = Show-SourceFingerprint $source.Path $source
+$buildVersion = Set-BuildVersion
+$fingerprint = Show-SourceFingerprint $source.Path $source $buildVersion
 
 Write-Step "npm ci"
 Push-Location $WorkDir
@@ -363,5 +473,11 @@ Write-Host "   The build is unsigned, so SmartScreen will warn on first run." -F
 Write-Host "   Install Npcap (Wireshark) if you have not, then run the app as Administrator." -ForegroundColor Yellow
 if ($fingerprint.Card -ne "present") {
     Write-Host "   That build has no target card in it." -ForegroundColor Red
+}
+
+if ($NoInstall) {
+    Write-Host "`n   -NoInstall given; the MSI is left on disk." -ForegroundColor Yellow
+} else {
+    Install-Msi $msi.FullName
 }
 Start-Process explorer.exe "/select,`"$($msi.FullName)`""
