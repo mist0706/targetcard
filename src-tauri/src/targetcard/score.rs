@@ -127,6 +127,92 @@ pub fn search_url(keyword: &str, server_id: Option<u16>) -> String {
     url
 }
 
+/// One row of a search result, narrowed to what a lookup needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Candidate {
+    pub name: String,
+    pub character_id: String,
+    pub server_id: u16,
+    pub server: String,
+    pub level: u32,
+}
+
+/// Every exact name match in a search response.
+///
+/// The endpoint is a fuzzy search: asking for `Tails` returns `Sixtails`,
+/// `Ninetails` and one `Tails` per EU server. Taking the first row regardless
+/// produced a real number for the wrong character, which is worse than no
+/// number, so only rows whose name is exactly the one asked for survive.
+pub fn exact_candidates(payload: &serde_json::Value, wanted: &str) -> Vec<Candidate> {
+    let Some(rows) = payload.get("list").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    let wanted = wanted.trim();
+    rows.iter()
+        .filter_map(|row| {
+            let name = strip_tags(row.get("name")?.as_str()?);
+            if !name.eq_ignore_ascii_case(wanted) {
+                return None;
+            }
+            Some(Candidate {
+                name,
+                character_id: decode(row.get("characterId")?.as_str()?),
+                server_id: row.get("serverId")?.as_u64()? as u16,
+                server: row.get("serverName")?.as_str()?.to_string(),
+                level: row.get("level")?.as_u64()? as u32,
+            })
+        })
+        .collect()
+}
+
+/// Which candidate is the player the card is showing.
+///
+/// Names are not unique: `Tails` exists on six EU servers at level 45. In order:
+///
+/// 1. the player's own server, when it has a match
+/// 2. otherwise a single candidate at arena level, since a match on several
+///    servers with several level 45s is not an identification, it is a guess
+/// 3. otherwise a single candidate of any level
+///
+/// `None` means "ask again another way rather than show a number that might
+/// belong to somebody else".
+pub fn pick_candidate(candidates: &[Candidate], local_server: Option<u16>) -> Option<Candidate> {
+    if candidates.is_empty() {
+        return None;
+    }
+    if let Some(server) = local_server {
+        let mut here: Vec<&Candidate> = candidates.iter().filter(|c| c.server_id == server).collect();
+        if !here.is_empty() {
+            here.sort_by_key(|c| std::cmp::Reverse(c.level));
+            return Some(here[0].clone());
+        }
+    }
+    let mut grown: Vec<&Candidate> = candidates.iter().filter(|c| c.level >= 40).collect();
+    grown.sort_by_key(|c| std::cmp::Reverse(c.level));
+    if grown.len() == 1 {
+        return Some(grown[0].clone());
+    }
+    if !grown.is_empty() {
+        return None; // several arena-level players share the name
+    }
+    if candidates.len() == 1 {
+        return Some(candidates[0].clone());
+    }
+    None
+}
+
+/// Are these the same class, given the two vocabularies in play?
+///
+/// The parser calls one class Elementalist; the game and the API call it
+/// Spiritmaster. Everything else is spelled the same.
+pub fn same_class(a: &str, b: &str) -> bool {
+    let norm = |value: &str| {
+        let lower = value.trim().to_lowercase();
+        if lower == "elementalist" { "spiritmaster".to_string() } else { lower }
+    };
+    !a.trim().is_empty() && norm(a) == norm(b)
+}
+
 pub fn info_url(character_id: &str, server_id: u16) -> String {
     format!(
         "{INFO_BASE}?lang={LANG}&characterId={}&serverId={server_id}&region={REGION_EU}",
@@ -273,5 +359,86 @@ mod tests {
     fn search_highlight_tags_are_stripped() {
         assert_eq!(strip_tags("<strong>Sins</strong>"), "Sins");
         assert_eq!(strip_tags(" tch<strong>sins</strong> "), "tchsins");
+    }
+
+    /// The rows this endpoint really returns for `Tails`, trimmed to the fields
+    /// the lookup reads: one exact match per EU server, six of them level 45.
+    fn tails_payload() -> serde_json::Value {
+        let rows = [
+            ("tails", 17, 1310, "Nania"),
+            ("Tails", 45, 2312, "Ulgorn"),
+            ("Tails", 33, 2310, "Hadala"),
+            ("Tails", 45, 2301, "Israphel"),
+            ("Tails", 45, 2302, "Zikel"),
+            ("Tails", 45, 2303, "Triniel"),
+            ("Tails", 45, 2311, "Ludra"),
+            ("Tailss", 1, 2312, "Ulgorn"),
+            ("Sixtails", 1, 1313, "Phernos"),
+            ("Ninetails", 1, 1313, "Phernos"),
+        ];
+        serde_json::json!({
+            "list": rows.iter().map(|(name, level, server, server_name)| serde_json::json!({
+                "name": format!("<strong>{name}</strong>"),
+                "characterId": "abc%3D",
+                "level": level,
+                "serverId": server,
+                "serverName": server_name,
+            })).collect::<Vec<_>>()
+        })
+    }
+
+    #[test]
+    fn class_names_are_compared_across_vocabularies() {
+        assert!(same_class("Templar", "templar"));
+        assert!(same_class("Elementalist", "Spiritmaster"));
+        assert!(same_class("Spiritmaster", "Elementalist"));
+        assert!(!same_class("Templar", "Assassin"));
+        assert!(!same_class("", "Templar"));
+    }
+
+    #[test]
+    fn a_fuzzy_search_only_yields_exact_names() {
+        let candidates = exact_candidates(&tails_payload(), "Tails");
+        assert_eq!(candidates.len(), 7, "one exact match per server, no Sixtails");
+        assert!(candidates.iter().all(|c| c.name.eq_ignore_ascii_case("Tails")));
+    }
+
+    #[test]
+    fn the_players_own_server_wins() {
+        let candidates = exact_candidates(&tails_payload(), "Tails");
+        let picked = pick_candidate(&candidates, Some(2310)).expect("Hadala Tails");
+        assert_eq!(picked.server, "Hadala");
+        assert_eq!(picked.level, 33);
+    }
+
+    #[test]
+    fn several_arena_level_matches_elsewhere_are_not_a_guess() {
+        // This is the report that started it: five level 45 players named Tails
+        // on other servers, and Phernos had nobody of that name.
+        let candidates = exact_candidates(&tails_payload(), "Tails");
+        assert_eq!(pick_candidate(&candidates, Some(1313)), None);
+
+        // With no idea which server we are on, it is no better.
+        assert_eq!(pick_candidate(&candidates, None), None);
+    }
+
+    #[test]
+    fn one_arena_level_match_is_enough_for_a_cross_server_opponent() {
+        let payload = serde_json::json!({"list": [
+            {"name": "<strong>Mikuwu</strong>", "characterId": "x", "level": 45, "serverId": 2302, "serverName": "Zikel"},
+            {"name": "<strong>Mikuwuu</strong>", "characterId": "y", "level": 12, "serverId": 1313, "serverName": "Phernos"}
+        ]});
+        let candidates = exact_candidates(&payload, "Mikuwu");
+        let picked = pick_candidate(&candidates, Some(1313)).expect("the only level 45 Mikuwu");
+        assert_eq!(picked.server, "Zikel");
+    }
+
+    #[test]
+    fn a_lone_low_level_match_is_still_the_answer() {
+        let payload = serde_json::json!({"list": [
+            {"name": "<strong>Lowbie</strong>", "characterId": "x", "level": 8, "serverId": 1313, "serverName": "Phernos"}
+        ]});
+        let candidates = exact_candidates(&payload, "Lowbie");
+        assert_eq!(pick_candidate(&candidates, Some(1313)).map(|c| c.level), Some(8));
     }
 }

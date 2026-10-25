@@ -137,6 +137,14 @@
     host.replaceChildren(fresh.childNodes.length ? fresh : emptyRow("waiting for players"));
   }
 
+  // The class from the packet stream for whichever row this name belongs to, if
+  // one is on screen. Not the API's answer: that is what we are trying to get.
+  function classOf(name) {
+    const key = name.toLowerCase();
+    const row = lastRecent.find((player) => player.name.toLowerCase() === key);
+    return row?.class || null;
+  }
+
   function enqueue(player) {
     const key = player.name.toLowerCase();
     if (scores.has(key) || queued.has(key)) return;
@@ -155,8 +163,11 @@
         const key = name.toLowerCase();
         inFlight += 1;
         try {
+          // The class the game showed travels with the request: names are not
+          // unique (five level 45 players called Tails across EU), so when the
+          // name is shared the class is what tells them apart.
           const score = await withTimeout(
-            invoke("targetcard_score", { name, server }),
+            invoke("targetcard_score", { name, server, class: classOf(name) }),
             LOOKUP_TIMEOUT_MS,
           );
           if (score) {

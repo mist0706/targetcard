@@ -150,7 +150,6 @@ pub fn start(app_data_dir: PathBuf, log_path: PathBuf) -> bool {
         };
         runtime.block_on(async move {
         let session = format!("{}-logs", host_name());
-        let mut last_sent: Option<(u64, u64)> = None; // (len, mtime secs)
         let interval = config.interval_secs.max(30);
         // First sample a minute in, not five: when someone starts the app to
         // check whether the upload works, waiting five minutes to find out is
@@ -170,13 +169,6 @@ pub fn start(app_data_dir: PathBuf, log_path: PathBuf) -> bool {
             // unchanged logs saved nothing worth saving and made "is the app
             // alive, is the collector reachable" unanswerable during quiet
             // stretches, which is exactly when the question comes up.
-            let mtime = meta
-                .modified()
-                .ok()
-                .and_then(|at| at.duration_since(UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-
             let Some(tail) = tail(&log_path, MAX_TAIL_BYTES) else {
                 continue;
             };
@@ -184,11 +176,9 @@ pub fn start(app_data_dir: PathBuf, log_path: PathBuf) -> bool {
                 continue;
             };
             let name = format!("{session}/{}-debug.log.gz", stamp());
+            let size = zipped.len();
             match send_once(&config, zipped, &name).await {
-                Ok(()) => {
-                    last_sent = Some((meta.len(), mtime));
-                    tracing::debug!("diagnostics: sent {name}");
-                }
+                Ok(()) => tracing::debug!("diagnostics: sent {name} ({size} bytes)"),
                 Err(error) => {
                     // Retried on the next tick: the log will have grown, so the
                     // whole point of the next upload is this one plus more.
