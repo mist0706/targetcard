@@ -3339,9 +3339,18 @@ pub fn run() {
                 dps_calculator.set_all_targets_window_ms(ms);
             }
 
-            // Load logging settings from saved state
-            if settings.get("dpsMeter.debugLoggingEnabled").as_deref() == Some("true") {
+            // Load logging settings from saved state.
+            //
+            // A configured diagnostics collector implies file logging: sending
+            // an empty file on a schedule would be a strange thing to do.
+            let diagnostics_configured = crate::diagnostics::load(&app_data_dir).is_some();
+            if settings.get("dpsMeter.debugLoggingEnabled").as_deref() == Some("true")
+                || diagnostics_configured
+            {
                 logging::logger::set_debug_enabled(true, &app_data_dir);
+                if diagnostics_configured {
+                    tracing::info!("diagnostics: collector configured, so debug logging is on");
+                }
             }
             if settings.get("dpsMeter.saveRawPackets").as_deref() == Some("true") {
                 logging::logger::set_packet_log_enabled(true, &app_data_dir);
@@ -3393,6 +3402,13 @@ pub fn run() {
                     &app_data_dir,
                 )),
             ));
+
+            // Optional: push the debug log to a collector. Off unless
+            // diagnostics.json was written by the build script.
+            let log_path = app_data_dir.join("debug.log");
+            if !crate::diagnostics::start(app_data_dir.clone(), log_path) {
+                tracing::debug!("diagnostics: no collector configured");
+            }
 
             // On KDE, a KWin rule keeps the meter above a borderless game
             // (see platform::kwin_rules). Checked at every start and put back

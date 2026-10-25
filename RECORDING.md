@@ -55,3 +55,23 @@ entity id, so the packets right after the marker can be searched for it.
 It captures through the meter's own pipeline, which only feeds the port the game
 speaks on. Output goes to `--upload` or stays in `./recordings`. The collector
 stores files and serves nothing back but file names and sizes.
+
+## The app's own log
+
+The app can push its debug log to the same collector:
+
+```powershell
+.\build-targetcard.ps1 -BuildOnly -Force -CollectorToken TOKEN
+```
+
+That writes `%APPDATA%\com.targetcard.desktop\diagnostics.json` once; later builds
+reuse it, and the token stays out of this repository. With it present the app
+turns debug logging on by itself and uploads the **last megabyte of
+`debug.log`, gzipped, every five minutes, but only when the log has changed**.
+
+Sessions land in `~/aion-captures/<HOST>-logs/` on the collector. Delete
+`diagnostics.json` to stop, and nothing is sent again.
+
+What is in there: lookup outcomes and reasons, capture device and port choices,
+zone and party events, player names the parser saw, timings. No passwords and no
+game credentials, because the app never has any.

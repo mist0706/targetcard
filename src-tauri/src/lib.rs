@@ -46,6 +46,8 @@ mod party_presence;
 #[cfg(feature = "online")]
 mod presence;
 #[cfg(feature = "desktop")]
+pub mod diagnostics;
+#[cfg(feature = "desktop")]
 pub mod share;
 #[cfg(feature = "online")]
 pub mod stream_overlay;

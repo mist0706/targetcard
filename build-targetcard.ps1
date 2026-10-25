@@ -43,6 +43,14 @@
     Build but do not install. Without this the MSI is installed (or upgraded) at
     the end, which is the normal path: a newer version replaces the old one.
 
+.PARAMETER CollectorToken
+    Write %APPDATA%\com.targetcard.desktop\diagnostics.json so the app uploads
+    its debug log to $CollectorUrl every five minutes. Saved once and reused by
+    later runs; the token stays out of the repository.
+
+.PARAMETER CollectorUrl
+    Where those logs go. Defaults to the collector on the LAN.
+
 .PARAMETER Uninstall
     Remove an installed targetcard and stop.
 
@@ -60,7 +68,9 @@ param(
     [switch]$BuildOnly,
     [switch]$Force,
     [switch]$NoInstall,
-    [switch]$Uninstall
+    [switch]$Uninstall,
+    [string]$CollectorUrl = "http://10.7.1.235:8791",
+    [string]$CollectorToken
 )
 
 $ErrorActionPreference = "Stop"
@@ -259,6 +269,24 @@ function Set-BuildVersion {
     }
 
     return [pscustomobject]@{ Build = $version; Upstream = $upstream }
+}
+
+function Set-DiagnosticsCollector {
+    # The token must not live in the repository (public, GPL fork), so it is
+    # written to the app's own data directory by whoever runs the build, once.
+    if (-not $CollectorToken) { return $false }
+    $dir = Join-Path $env:APPDATA "com.targetcard.desktop"
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $config = [ordered]@{
+        upload_url    = $CollectorUrl
+        token         = $CollectorToken
+        interval_secs = 300
+    }
+    $path = Join-Path $dir "diagnostics.json"
+    [IO.File]::WriteAllText($path, ($config | ConvertTo-Json))
+    Write-Ok ("diagnostics: logs go to " + $CollectorUrl + " every 5 min")
+    Write-Ok ("             " + $path)
+    return $true
 }
 
 function Stop-RunningTargetcard {
@@ -479,5 +507,9 @@ if ($NoInstall) {
     Write-Host "`n   -NoInstall given; the MSI is left on disk." -ForegroundColor Yellow
 } else {
     Install-Msi $msi.FullName
+}
+
+if (-not (Set-DiagnosticsCollector)) {
+    Write-Host "   diagnostics: no -CollectorToken given, the app uploads nothing." -ForegroundColor Yellow
 }
 Start-Process explorer.exe "/select,`"$($msi.FullName)`""
