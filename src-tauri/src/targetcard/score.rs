@@ -127,6 +127,27 @@ pub fn search_url(keyword: &str, server_id: Option<u16>) -> String {
     url
 }
 
+/// What a lookup came back with, and why.
+///
+/// `reason` exists because "no such character" and "several characters and no way
+/// to tell them apart" need opposite retry policies: one is final for half an
+/// hour, the other should be asked again in a minute, since the class that
+/// settles it often arrives once the fight starts.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ScoreReply {
+    pub score: Option<GearScore>,
+    pub reason: &'static str,
+}
+
+impl ScoreReply {
+    pub fn found(score: GearScore) -> Self {
+        Self { score: Some(score), reason: "ok" }
+    }
+    pub fn missing(reason: &'static str) -> Self {
+        Self { score: None, reason }
+    }
+}
+
 /// One row of a search result, narrowed to what a lookup needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {

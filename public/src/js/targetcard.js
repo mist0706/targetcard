@@ -26,6 +26,9 @@
   const LOOKUP_TIMEOUT_MS = window.__TC_LOOKUP_TIMEOUT ?? 20_000;
   const RETRY_FAILED_MS = 60_000;        // network or timeout: again in a minute
   const RETRY_EMPTY_MS = 30 * 60_000;     // no such character: again in half an hour
+  // A name several players share, with no class to settle it yet. The class
+  // arrives once the fight starts, so ask again soon rather than in half an hour.
+  const RETRY_AMBIGUOUS_MS = 120_000;
 
   const invoke = window.__TAURI__?.core?.invoke;
   const rowsHost = () => document.getElementById("tc-rows");
@@ -168,15 +171,17 @@
           // The class the game showed travels with the request: names are not
           // unique (five level 45 players called Tails across EU), so when the
           // name is shared the class is what tells them apart.
-          const score = await withTimeout(
+          const reply = await withTimeout(
             invoke("targetcard_score", { name, server, class: classOf(name) }),
             LOOKUP_TIMEOUT_MS,
           );
-          if (score) {
-            scores.set(key, score);
+          if (reply?.score) {
+            scores.set(key, reply.score);
             retryAt.delete(key);
+          } else if (reply?.reason === "ambiguous") {
+            retryAt.set(key, Date.now() + RETRY_AMBIGUOUS_MS);
           } else {
-            // The API answered: no such character on this server.
+            // A definite answer: nobody by that name that we can find.
             retryAt.set(key, Date.now() + RETRY_EMPTY_MS);
           }
         } catch (error) {

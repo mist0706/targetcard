@@ -442,7 +442,7 @@ async fn targetcard_score(
     name: String,
     server: String,
     class: Option<String>,
-) -> Result<Option<crate::targetcard::score::GearScore>, String> {
+) -> Result<crate::targetcard::score::ScoreReply, String> {
     let state = app.state::<crate::targetcard::score_service::ScoreServiceState>();
     let mut service = state.0.lock().await;
     Ok(service.lookup(&name, &server, class.as_deref()).await)

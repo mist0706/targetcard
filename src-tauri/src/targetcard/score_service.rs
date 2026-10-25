@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::score::{
     exact_candidates, info_url, parse_score, plan, same_class, search_url, server_id, Candidate,
-    GearScore, Plan, ORIGIN, REFERER,
+    GearScore, Plan, ScoreReply, ORIGIN, REFERER,
 };
 
 const TTL_SECS: u64 = 6 * 3600;
@@ -81,26 +81,28 @@ impl ScoreService {
     /// power is indistinguishable between "the API has no such character", "the
     /// request never completed" and "the response changed shape". Those need
     /// different answers, and the log is the only place to tell them apart.
-    pub async fn lookup(&mut self, name: &str, server: &str, class: Option<&str>) -> Option<GearScore> {
+    pub async fn lookup(&mut self, name: &str, server: &str, class: Option<&str>) -> ScoreReply {
         let started = std::time::Instant::now();
         if let Some(hit) = self.cached(name, server) {
             tracing::debug!("targetcard: {name}@{server} cache hit");
-            return Some(hit);
+            return ScoreReply::found(hit);
         }
         let Some(id) = server_id(server) else {
             tracing::warn!("targetcard: {name}: unknown server '{server}', nothing to look up");
-            return None;
+            return ScoreReply::missing("no_server");
         };
-        let candidates = self.search(name).await?;
+        let Some(candidates) = self.search(name).await else {
+            return ScoreReply::missing("not_found");
+        };
         let Some(score) = self.resolve(name, id, class, started, &candidates).await else {
-            return None;
+            return ScoreReply::missing("ambiguous");
         };
         self.cache.insert(
             Self::key(server, name),
             Cached { score: score.clone(), at: now_secs() },
         );
         self.flush();
-        Some(score)
+        ScoreReply::found(score)
     }
 
     /// Every exact name match on every EU server.
