@@ -290,6 +290,7 @@ mod tests {
         GearScore {
             name: "Sins".into(),
             server: "Phernos".into(),
+            race: Some(1),
             class_name: Some("Assassin".into()),
             level: Some(45),
             item_level: Some(item_level),
