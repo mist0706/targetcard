@@ -146,6 +146,10 @@ pub fn set_debug_enabled(enabled: bool, log_dir: &std::path::Path) {
                 *guard = Some(writer);
             } // guard dropped before tracing
             tracing::info!("Debug file logging started: {}", path.display());
+        } else {
+            // Nothing else would say so: the log that would carry the complaint is
+            // the one that could not be opened.
+            eprintln!("a2tools: could not open the debug log at {}", path.display());
         }
     } else if !enabled && prev {
         {
