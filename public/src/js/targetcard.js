@@ -42,6 +42,11 @@
   let inFlight = 0;
   let pumping = false;
   let lastRecent = [];
+  // In the Abyss the table shows hostiles only. That needs our own faction, which
+  // costs one lookup of our own name and is then remembered for the session.
+  let inAbyss = false;
+  let selfRace = null;
+  let askingSelfRace = false;
   let server = FALLBACK_SERVER;
 
   // The parser calls it Elementalist; the game and the API call it Spiritmaster.
@@ -113,6 +118,15 @@
 
       const key = player.name.toLowerCase();
       const score = scores.get(key) || null;
+
+      // Abyss: keep hostiles, drop our own side. A row whose faction is not known
+      // yet stays visible rather than blinking out and back; it disappears as soon
+      // as the answer says it was a teammate.
+      const race = score?.race ?? null;
+      if (inAbyss && selfRace != null && race != null && race === selfRace) {
+        seen.add(player.entity_id);
+        return;
+      }
       const cls = className(player, score);
       // A dash says "asked, nothing there". An ellipsis promises an answer, so
       // it is only shown while a lookup is running or due.
@@ -139,7 +153,8 @@
       if (!seen.has(id)) rows.delete(id);
     }
 
-    host.replaceChildren(fresh.childNodes.length ? fresh : emptyRow("waiting for players"));
+    const nothing = inAbyss && selfRace != null ? "no hostiles in range" : "waiting for players";
+    host.replaceChildren(fresh.childNodes.length ? fresh : emptyRow(nothing));
   }
 
   // The class from the packet stream for whichever row this name belongs to, if
@@ -198,16 +213,37 @@
     }
   }
 
+  /// Learn which faction we are, so the Abyss filter has something to compare to.
+  /// One request, once per session, and only while the player is in the Abyss.
+  async function askSelfRace(name, serverName) {
+    if (selfRace != null || askingSelfRace || !name) return;
+    askingSelfRace = true;
+    try {
+      const reply = await withTimeout(
+        invoke("targetcard_score", { name, server: serverName || server, class: null }),
+        LOOKUP_TIMEOUT_MS,
+      );
+      const race = reply?.score?.race ?? null;
+      if (race != null) {
+        selfRace = race;
+        console.log("targetcard: our faction is", race === 1 ? "Elyos" : "Asmodian");
+        render();
+      }
+    } catch (error) {
+      console.error("targetcard: could not learn our faction", error);
+    } finally {
+      askingSelfRace = false;
+    }
+  }
+
   async function tick() {
     try {
       const snapshot = await withTimeout(invoke("targetcard_snapshot"), LOOKUP_TIMEOUT_MS);
       server = snapshot?.server_name || FALLBACK_SERVER;
       lastRecent = snapshot?.recent || [];
+      inAbyss = !!snapshot?.in_abyss;
       render();
-      // Zone: the Abyss tag is worth seeing before the roster fills in, and it
-      // comes from the map the game loaded rather than from guesswork.
-      const tag = document.getElementById("tc-zone");
-      if (tag) tag.hidden = !snapshot?.in_abyss;
+      if (inAbyss) askSelfRace(snapshot?.local_name, snapshot?.server_name);
 
       for (const player of lastRecent) {
         if (player.combat_power == null) enqueue(player);

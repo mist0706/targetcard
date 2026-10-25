@@ -34,6 +34,8 @@ pub struct TargetSnapshot {
     pub map_id: Option<i32>,
     /// Whether the player is in the Abyss right now.
     pub in_abyss: bool,
+    /// The local character's name, so the page can learn its faction.
+    pub local_name: Option<String>,
     /// The local player's server, when the game has told us its id and we know
     /// the name for it. `None` lets the page fall back to its configured server.
     pub server_name: Option<String>,
@@ -156,6 +158,7 @@ pub fn snapshot(storage: &DataStorage) -> TargetSnapshot {
         focus_entity_id,
         map_id: storage.current_map_id(),
         in_abyss: storage.in_abyss(),
+        local_name: storage.local_character_name(),
         server_name,
     }
 }

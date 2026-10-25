@@ -55,6 +55,9 @@ pub const EU_SERVERS: &[(&str, u16)] = &[
 pub struct GearScore {
     pub name: String,
     pub server: String,
+    /// Faction: 1 Elyos, 2 Asmodian, as the API states it. The card uses it to
+    /// show only hostiles in the Abyss.
+    pub race: Option<u8>,
     pub class_name: Option<String>,
     pub level: Option<u32>,
     pub item_level: Option<u32>,
@@ -156,6 +159,7 @@ pub struct Candidate {
     pub server_id: u16,
     pub server: String,
     pub level: u32,
+    pub race: Option<u8>,
 }
 
 /// Every exact name match in a search response.
@@ -181,6 +185,7 @@ pub fn exact_candidates(payload: &serde_json::Value, wanted: &str) -> Vec<Candid
                 server_id: row.get("serverId")?.as_u64()? as u16,
                 server: row.get("serverName")?.as_str()?.to_string(),
                 level: row.get("level")?.as_u64()? as u32,
+                race: row.get("race").and_then(|r| r.as_u64()).map(|r| r as u8),
             })
         })
         .collect()
@@ -324,6 +329,9 @@ pub fn parse_score(payload: &serde_json::Value) -> Option<GearScore> {
     Some(GearScore {
         name,
         server,
+        // The info payload does not carry a faction; the service fills this in
+        // from the search row that led here.
+        race: None,
         class_name: profile
             .get("className")
             .and_then(|v| v.as_str())
@@ -523,6 +531,7 @@ mod tests {
             server_id: server,
             server: server_name.to_string(),
             level,
+            race: None,
         }
     }
 

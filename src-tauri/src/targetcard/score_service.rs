@@ -242,7 +242,8 @@ impl ScoreService {
         let payload = self
             .get_json(&info_url(&candidate.character_id, candidate.server_id))
             .await?;
-        let score = parse_score(&payload)?;
+        let mut score = parse_score(&payload)?;
+        score.race = candidate.race;
         tracing::debug!(
             "targetcard: {} ({}) CP {:?} in {:?}",
             candidate.name,
