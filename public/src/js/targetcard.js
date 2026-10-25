@@ -82,6 +82,7 @@
     const dot = document.createElement("i");
     dot.className = "dot";
     const label = document.createElement("span");
+    label.className = "clabel";
     cls.append(dot, label);
     const cp = document.createElement("span");
     cp.className = "cp";
@@ -116,6 +117,7 @@
 
       const dotClass = cls ? cls.toLowerCase().replace(/[^a-z]/g, "") : "";
       parts.dot.className = `dot ${dotClass}`;
+      parts.label.className = `clabel ${dotClass}`;
       parts.label.textContent = cls || (waiting ? "…" : "—");
 
       const power = player.combat_power ?? score?.combat_power ?? null;

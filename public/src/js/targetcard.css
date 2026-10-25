@@ -104,14 +104,21 @@ body {
   font-size: 11.5px;
 }
 
-/* Aion's class palette, as close as the icons in game suggest. */
-.dot.gladiator { background: #e2554b; }
-.dot.templar { background: #d8a13c; }
-.dot.assassin { background: #a06ad4; }
-.dot.ranger { background: #63b25c; }
-.dot.sorcerer { background: #4f8fe0; }
-.dot.spiritmaster,
-.dot.elementalist { background: #d269b0; }
-.dot.cleric { background: #e8e2d2; }
-.dot.chanter { background: #3fbfb0; }
-.dot.fighter { background: #b0b6c4; }
+/* The game's class colours, taken from the meter's own palette (core.js
+   jobColorMap) rather than guessed: Gladiator teal, Templar blue, Ranger green,
+   Assassin lime, Sorcerer violet, Spiritmaster magenta, Cleric gold, Chanter
+   orange, Brawler red. The dot and the class name share them. */
+.dot { background: var(--cls, rgba(232, 233, 242, 0.30)); }
+.clabel { color: var(--cls, rgba(232, 233, 242, 0.62)); }
+
+.gladiator   { --cls: #4FD1C5; }
+.templar     { --cls: #5F8CFF; }
+.ranger      { --cls: #41D98A; }
+.assassin    { --cls: #7BE35A; }
+.sorcerer    { --cls: #9A6BFF; }
+.spiritmaster,
+.elementalist { --cls: #E06BFF; }
+.cleric      { --cls: #F2C15A; }
+.chanter     { --cls: #FF9A3D; }
+.brawler,
+.fighter     { --cls: #E85D5D; }
