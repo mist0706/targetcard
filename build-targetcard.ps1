@@ -73,6 +73,10 @@ param(
     [string]$CollectorToken
 )
 
+# Bumped whenever this script changes, and printed, so a stale copy in Downloads
+# or %TEMP% says so instead of failing on a parameter it has never heard of.
+$ScriptStamp = "2026-10-25T12:00Z"
+
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"      # speeds up Invoke-WebRequest a lot
 # Windows PowerShell 5.1 still negotiates TLS 1.0 by default and GitHub refuses it.
@@ -367,6 +371,7 @@ function Show-SourceFingerprint([string]$Zip, $Source, $Build) {
     $card = if ($missing.Count -eq 0) { "present" } else { "MISSING" }
 
     $upstream = if ($Build) { $Build.Upstream } else { "?" }
+    Write-Ok ("script:    " + $ScriptStamp)
     Write-Ok ("version:   " + $version + "  (upstream " + $upstream + ")   npm " + $pkgVersion)
     Write-Ok ("card code: " + $card)
     Write-Ok ("archive:   " + $hash.Substring(0, 16) + "...")
