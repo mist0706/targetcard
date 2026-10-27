@@ -162,7 +162,7 @@ impl StreamProcessor {
         // player's record (45 36). This is the primary naming source: it covers
         // the already-loaded case where no login char-list is in the capture.
         for r in regions {
-            self.scan_masked_identity(&data[r.clone()]);
+            self.scan_masked_identity(&data[r.clone()], &data[r.end..]);
         }
         // Party roster (names, levels, gear score, combat power).
         for r in regions {
@@ -202,7 +202,7 @@ impl StreamProcessor {
                     let walk = super::framing::walk_inner(&data);
                     let regions = super::framing::regions(&walk.frames, data.len());
                     for r in &regions {
-                        self.scan_masked_identity(&data[r.clone()]);
+                        self.scan_masked_identity(&data[r.clone()], &data[r.end..]);
                     }
                     for r in &regions {
                         self.scan_party_roster(&data[r.clone()]);
@@ -923,7 +923,7 @@ impl StreamProcessor {
     /// for the user to have typed their character name into settings, and it
     /// works when you are already loaded into a zone (where there is no login
     /// char-list and you never see your own spawn).
-    fn scan_masked_identity(&self, data: &[u8]) {
+    fn scan_masked_identity(&self, data: &[u8], tail: &[u8]) {
         for record in masked_records(data) {
             let id = record.id;
             let Some(sanitized) = record.name else {
@@ -946,7 +946,7 @@ impl StreamProcessor {
             // a real server. The local player's own record says it right after the
             // name instead, which `self_profile` already reads.
             if record.profile.is_none() {
-                if let Some(server) = record_server(data, record.field.end) {
+                if let Some(server) = record_server(data, record.field.end, tail) {
                     self.data_storage.note_player_server(&sanitized, server);
                 }
             }
@@ -2788,8 +2788,7 @@ fn self_profile(data: &[u8], after: usize) -> Option<(u16, Option<JobClass>)> {
 /// Layout, as read off three records with a known answer: a `01` tag, then the
 /// server id as `u16` little-endian, then the class and level. Only ids that name a
 /// real server are accepted, which is what makes a two-byte read safe here.
-fn record_server(data: &[u8], after: usize) -> Option<u16> {
-    let window = data.get(after..(after + 120).min(data.len()))?;
+fn server_in(window: &[u8]) -> Option<u16> {
     for index in 0..window.len().saturating_sub(2) {
         if window[index] != 0x01 {
             continue;
@@ -2800,6 +2799,24 @@ fn record_server(data: &[u8], after: usize) -> Option<u16> {
         }
     }
     None
+}
+
+/// The server an identity record states, searched from the end of its name.
+///
+/// The bytes after the name are read from the region that carried the record, and
+/// then from whatever followed that region in the packet: a frame can end before the
+/// server is reached, which is how every stated server went unread in the first
+/// version of this.
+fn record_server(data: &[u8], after: usize, tail: &[u8]) -> Option<u16> {
+    let window: Vec<u8> = data
+        .get(after..)
+        .unwrap_or_default()
+        .iter()
+        .chain(tail.iter())
+        .take(140)
+        .copied()
+        .collect();
+    server_in(&window)
 }
 
 fn unicode_script(ch: char) -> UnicodeScript {
@@ -4529,7 +4546,7 @@ mod tests {
         let processor = StreamProcessor::new(storage.clone(), Arc::new(SkillLookup::new()), Arc::new(NpcLookup::new()));
         let hex = "3336ed745e91c12837064e616963686118051e000000011c0000007f0100007f0100001c000000d002040000000000";
         let record: Vec<u8> = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect();
-        processor.scan_masked_identity(&record);
+        processor.scan_masked_identity(&record, &[]);
         let me = storage.local_profile();
         assert_eq!(me.name.as_deref(), Some("Naicha"));
         assert_eq!(storage.local_player_id(), Some(14957));
@@ -4544,7 +4561,7 @@ mod tests {
         let storage = Arc::new(DataStorage::new());
         let processor = StreamProcessor::new(storage.clone(), Arc::new(SkillLookup::new()), Arc::new(NpcLookup::new()));
         let record = hex("3336ef295fa1c128370b4e756c6c63657074696f6e080924000000022d000000f8070000f80700002d000000");
-        processor.scan_masked_identity(&record);
+        processor.scan_masked_identity(&record, &[]);
         let me = storage.local_profile();
         assert_eq!(me.name.as_deref(), Some("Nullception"));
         assert_eq!((me.server_id, me.level, me.gear_score), (2312, Some(45), Some(2040)));
@@ -4562,7 +4579,7 @@ mod tests {
             "ac6b000000000000ac6b0000000000000501790002000003000004000005000005011900020000030000040000050000",
             "010300000001000000",
         ));
-        processor.scan_masked_identity(&record);
+        processor.scan_masked_identity(&record, &[]);
         let me = storage.local_profile();
         assert_eq!(me.name.as_deref(), Some("Nully"));
         assert_eq!((me.level, me.gear_score, me.combat_power), (Some(35), Some(426), Some(27_564)));
@@ -5005,12 +5022,12 @@ mod tests {
         let ajix = hex_bytes(
             "23000000 020100 92 19eae9c52c04a44300e07545000100900198559c5f250b0000 04000402003154ff010400f1 0034080000f049020001000000a0860104 0031f02b070400f30402fc696502539640010c090a11142113300bff0100ff0e8075d52abb03",
         );
-        assert_eq!(record_server(&ajix, 0), Some(2316));
+        assert_eq!(record_server(&ajix, 0, &[]), Some(2316));
 
         let tanki = hex_bytes(
             "0b000000 020100 d20f5bdc45c8109042002076450000344300800 1a6d10300 40ba0b0000040004020031344702040000100 0b1f04902000100000 0a0860104 0031c3fb0904 00f10a0288e46302a4676502e51a5f010409 101012 844e00003880e42e00e4",
         );
-        assert_eq!(record_server(&tanki, 0), Some(2308));
+        assert_eq!(record_server(&tanki, 0, &[]), Some(2308));
     }
 
     #[test]
@@ -5018,6 +5035,6 @@ mod tests {
         // 0x0fff is inside the 1000..3000 range a naive read accepts, but no server
         // has that id, so the read stops there.
         let junk = hex_bytes("0000 01 ff0f 0000 0000");
-        assert_eq!(record_server(&junk, 0), None);
+        assert_eq!(record_server(&junk, 0, &[]), None);
     }
 }
