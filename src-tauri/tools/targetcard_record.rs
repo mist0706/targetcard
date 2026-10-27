@@ -73,6 +73,29 @@ fn capture_line(at_ms: i64, stream: &str, data: &[u8]) -> String {
     format!("{}|{}|{}\n", rfc3339(at_ms), stream, hex)
 }
 
+/// Is this a LAN or loopback address? The game lives on the public internet, so a
+/// flow between two of these is somebody's browser talking to a machine in the
+/// house, never the thing worth recording.
+fn is_local(ip: Ipv4Addr) -> bool {
+    ip.is_loopback() || ip.is_private() || ip.is_link_local() || ip.is_unspecified()
+}
+
+/// Should this payload be recorded at all?
+///
+/// Two conditions. It has to be on the game's port, because the capturer hands over
+/// every flow on the device, and both ends have to not be local addresses, because
+/// the port detector occasionally settles on a port that is not the game's: one
+/// capture came back with 235 KB of the local dashboard in it.
+fn worth_recording(payload: &CapturedPayload, game_port: Option<u16>) -> bool {
+    let on_game_port =
+        game_port.is_some_and(|port| payload.src_port == port || payload.dst_port == port);
+    if !on_game_port {
+        return false;
+    }
+    let local = |ip: Option<Ipv4Addr>| ip.is_none_or(is_local);
+    !(local(payload.src_ip) && local(payload.dst_ip))
+}
+
 fn stream_key(payload: &CapturedPayload) -> String {
     let src = payload.src_ip.unwrap_or(Ipv4Addr::UNSPECIFIED);
     let dst = payload.dst_ip.unwrap_or(Ipv4Addr::UNSPECIFIED);
@@ -301,9 +324,7 @@ fn main() {
                 // on the same device, and a capture that carries someone's browser
                 // traffic is not something to upload.
                 let game_port = port_detector.current_port();
-                let on_game_port = game_port
-                    .is_some_and(|port| payload.src_port == port || payload.dst_port == port);
-                if !on_game_port {
+                if !worth_recording(&payload, game_port) {
                     let _ = forward_tx.try_send(payload);
                     continue;
                 }
@@ -474,5 +495,45 @@ mod tests {
         there.src_port = 443;
         there.dst_port = 5000;
         assert_eq!(stream_key(&there), "10.0.0.2:443>10.0.0.9:5000");
+    }
+
+    fn payload(src: &str, dst: &str, sport: u16, dport: u16) -> CapturedPayload {
+        CapturedPayload {
+            src_port: sport,
+            dst_port: dport,
+            data: Vec::new(),
+            device_name: None,
+            captured_at_ms: 0,
+            src_ip: Some(src.parse().unwrap()),
+            dst_ip: Some(dst.parse().unwrap()),
+            tcp_seq: 0,
+            tcp_ack: 0,
+        }
+    }
+
+    #[test]
+    fn the_game_flow_is_recorded() {
+        // 193.202.112.106:13328 is the game server from a real capture.
+        let game = payload("10.7.1.43", "193.202.112.106", 53026, 13328);
+        assert!(worth_recording(&game, Some(13328)));
+    }
+
+    #[test]
+    fn the_local_dashboard_is_not() {
+        // This exact flow ended up in a 2.3 MB capture: the browser talking to the
+        // machine running the collector, on a port the detector had settled on.
+        let dashboard = payload("10.7.1.235", "10.7.1.43", 9119, 56876);
+        assert!(
+            !worth_recording(&dashboard, Some(9119)),
+            "both ends are on the LAN, that is not the game"
+        );
+        let loopback = payload("10.7.1.43", "127.0.0.1", 5000, 13328);
+        assert!(!worth_recording(&loopback, Some(13328)));
+    }
+
+    #[test]
+    fn nothing_is_recorded_before_the_game_port_is_known() {
+        let game = payload("10.7.1.43", "193.202.112.106", 53026, 13328);
+        assert!(!worth_recording(&game, None));
     }
 }
