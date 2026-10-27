@@ -267,6 +267,16 @@
     return selfLevel - 5;
   }
 
+  /// Report a page-side failure to the app log. Best effort: if this call itself
+  /// fails there is nowhere left to say so.
+  function report(message) {
+    try {
+      invoke("targetcard_log", { level: "warn", message }).catch(() => {});
+    } catch (error) {
+      /* the webview is gone */
+    }
+  }
+
   async function tick() {
     try {
       const snapshot = await withTimeout(invoke("targetcard_snapshot"), LOOKUP_TIMEOUT_MS);
@@ -282,6 +292,7 @@
       }
     } catch (error) {
       console.error("targetcard: snapshot failed", error);
+      report(`snapshot failed: ${error?.message ?? error}`);
     } finally {
       setTimeout(tick, POLL_MS);
     }

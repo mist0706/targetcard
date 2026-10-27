@@ -425,6 +425,22 @@ fn details_reader(state: &AppState) -> DpsCalculator {
 
 /// The target card asks this once a second: every player it can see, and which
 /// one to show. Cheap (a few map clones), so it runs on the caller's thread.
+/// Let the card's page write to the same log as the app.
+///
+/// Without this, everything that can go wrong on the page side — a rejected
+/// invoke, a snapshot that never arrives — happens in a webview console nobody can
+/// read, and the log shows a name with no number and no explanation. A row showing
+/// a dash is supposed to mean "asked, and there was no answer", and this is what
+/// makes that true.
+#[tauri::command]
+fn targetcard_log(level: String, message: String) {
+    match level.as_str() {
+        "error" => tracing::error!("targetcard page: {message}"),
+        "info" => tracing::info!("targetcard page: {message}"),
+        _ => tracing::warn!("targetcard page: {message}"),
+    }
+}
+
 #[tauri::command]
 async fn targetcard_snapshot(
     app: tauri::AppHandle,
@@ -3947,6 +3963,7 @@ pub fn run() {
             get_app_version,
             get_hotkey_status,
             open_desktop_shortcuts,
+            targetcard_log,
             crate::plugins::plugin_list,
             crate::plugins::plugin_set_dev_mode,
             crate::plugins::plugin_add_folder,

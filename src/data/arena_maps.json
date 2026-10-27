@@ -1,6 +1,7 @@
 {
-  "_note": "Map ids that are the arena. 60 was seen on three separate zone loads during a session that contained arena matches, between two open-world loads of 1010.",
+  "_note": "Map ids that are the arena. 60 was seen on three loads in one session with matches; 61 on a load during another. Both are low ids that are neither open world nor the 600k dungeon range.",
   "maps": [
-    60
+    60,
+    61
   ]
 }
