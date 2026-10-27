@@ -45,6 +45,7 @@
   // In the Abyss the table shows hostiles only. That needs our own faction, which
   // costs one lookup of our own name and is then remembered for the session.
   let inAbyss = false;
+  let inArena = false;
   let selfRace = null;
   let selfLevel = null;
   let askingSelf = false;
@@ -193,6 +194,7 @@
               server,
               class: classOf(name),
               floor: levelFloor(),
+              arena: inArena,
             }),
             LOOKUP_TIMEOUT_MS,
           );
@@ -233,6 +235,7 @@
           server: serverName || server,
           class: null,
           floor: null,
+          arena: false,
         }),
         LOOKUP_TIMEOUT_MS,
       );
@@ -269,6 +272,7 @@
       server = snapshot?.server_name || FALLBACK_SERVER;
       lastRecent = snapshot?.recent || [];
       inAbyss = !!snapshot?.in_abyss;
+      inArena = !!snapshot?.in_arena;
       render();
       askSelf(snapshot?.local_name, snapshot?.server_name);
 

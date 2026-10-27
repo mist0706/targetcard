@@ -103,6 +103,25 @@ pub fn is_abyss_map(map_id: i32) -> bool {
     ABYSS_MAPS.contains(&map_id)
 }
 
+/// Map ids that are the arena, from `src/data/arena_maps.json`.
+///
+/// The arena is a zone like any other, so a map load says you are in it. Knowing
+/// that matters for what the card is allowed to assume: a level 45 with 37,000
+/// combat power is plausible in the open world and implausible in a match.
+static ARENA_MAPS: std::sync::LazyLock<HashSet<i32>> = std::sync::LazyLock::new(|| {
+    #[derive(serde::Deserialize)]
+    struct Table {
+        maps: HashSet<i32>,
+    }
+    serde_json::from_str::<Table>(include_str!("../../../src/data/arena_maps.json"))
+        .map(|t| t.maps)
+        .unwrap_or_default()
+});
+
+pub fn is_arena_map(map_id: i32) -> bool {
+    ARENA_MAPS.contains(&map_id)
+}
+
 /// The dungeon the player is in, from the roster's dungeon and the last map
 /// load.
 ///
@@ -2160,11 +2179,13 @@ impl DataStorage {
             inner.instance_generation += 1;
         }
         let dungeon = dungeon_of_map(inner.roster_dungeon_id, Some(map_id));
-        if dungeon != inner.current_dungeon_id {
+        let moved = from != Some(map_id);
+        if moved || dungeon != inner.current_dungeon_id {
             tracing::info!(
-                "Map {map_id}: dungeon {} -> {dungeon}{}",
+                "Map {map_id}: dungeon {} -> {dungeon}{}{}",
                 inner.current_dungeon_id,
-                if is_abyss_map(map_id) { " (Abyss)" } else { "" }
+                if is_abyss_map(map_id) { " (Abyss)" } else { "" },
+                if is_arena_map(map_id) { " (arena)" } else { "" }
             );
             inner.current_dungeon_id = dungeon;
         }
@@ -2183,6 +2204,15 @@ impl DataStorage {
     /// The map the player last loaded into, as the game stated it.
     pub fn current_map_id(&self) -> Option<i32> {
         self.inner.read().current_map_id
+    }
+
+    /// Is the player in the arena? Answered by the last map load, and by nothing
+    /// else: unlike the Abyss there is no traffic that only happens here.
+    pub fn in_arena(&self) -> bool {
+        self.inner
+            .read()
+            .current_map_id
+            .is_some_and(is_arena_map)
     }
 
     /// Is the player in the Abyss?
@@ -3563,6 +3593,22 @@ mod tests {
         assert_eq!(s.zone_generations().1, at_start + 2, "go again: the same dungeon loaded again");
         s.note_map_load(open);
         assert_eq!(s.zone_generations(), (5, at_start + 3), "back to the open world");
+    }
+
+    #[test]
+    fn a_map_load_says_whether_the_player_is_in_the_arena() {
+        // 1010 is open world and 60 is the id seen on three loads during a session
+        // with arena matches in it. A dungeon is neither.
+        let s = DataStorage::new();
+        assert!(!s.in_arena(), "nothing loaded yet");
+        s.note_map_load(1010);
+        assert!(!s.in_arena(), "open world");
+        s.note_map_load(60);
+        assert!(s.in_arena(), "the match");
+        s.note_map_load(610_001);
+        assert!(!s.in_arena(), "a dungeon is not the arena");
+        s.note_map_load(1010);
+        assert!(!s.in_arena(), "back outside");
     }
 
     #[test]

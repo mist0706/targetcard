@@ -34,6 +34,8 @@ pub struct TargetSnapshot {
     pub map_id: Option<i32>,
     /// Whether the player is in the Abyss right now.
     pub in_abyss: bool,
+    /// Whether the player is in the arena right now.
+    pub in_arena: bool,
     /// The local character's name, so the page can learn its faction.
     pub local_name: Option<String>,
     /// The local player's server, when the game has told us its id and we know
@@ -158,6 +160,7 @@ pub fn snapshot(storage: &DataStorage) -> TargetSnapshot {
         focus_entity_id,
         map_id: storage.current_map_id(),
         in_abyss: storage.in_abyss(),
+        in_arena: storage.in_arena(),
         local_name: storage.local_character_name(),
         server_name,
     }
@@ -247,6 +250,7 @@ mod tests {
         assert!(snapshot.players.is_empty());
         assert_eq!(snapshot.focus_entity_id, None);
         assert!(!snapshot.in_abyss, "an empty session is not in the Abyss");
+        assert!(!snapshot.in_arena, "an empty session is not in the arena");
         assert_eq!(snapshot.server_name, None);
     }
 

@@ -88,6 +88,7 @@ impl ScoreService {
         server: &str,
         class: Option<&str>,
         floor: Option<u32>,
+        arena: bool,
     ) -> ScoreReply {
         let started = std::time::Instant::now();
         if let Some(hit) = self.cached(name, server) {
@@ -113,7 +114,7 @@ impl ScoreService {
             return ScoreReply::missing("not_found");
         };
         let Some(score) = self
-            .resolve(name, id, class, floor.unwrap_or(0), started, &candidates)
+            .resolve(name, id, class, floor.unwrap_or(0), arena, started, &candidates)
             .await
         else {
             return ScoreReply::missing("ambiguous");
@@ -163,6 +164,7 @@ impl ScoreService {
         local: u16,
         class: Option<&str>,
         floor: u32,
+        arena: bool,
         started: std::time::Instant,
         candidates: &[Candidate],
     ) -> Option<GearScore> {
@@ -268,14 +270,16 @@ impl ScoreService {
                 }
             }
             Plan::GiveUp => {
-                // Last resort before a dash: if only one of these players is geared
-                // enough to be in a match, it is that one. Leu on Ludra at 77,671
-                // against Leu on Agnita at 37,031 is this case exactly.
+                // Last resort before a dash, and only inside a match: if just one of
+                // these players is geared enough to queue, it is that one. Leu on
+                // Ludra at 77,671 against Leu on Agnita at 37,031 is this case
+                // exactly. In the open world an under-geared namesake is entirely
+                // possible, so the rule does not apply there.
                 let plausible: Vec<&Candidate> = rest
                     .iter()
                     .filter(|candidate| candidate.level >= floor)
                     .collect();
-                if (2..=4).contains(&plausible.len()) {
+                if arena && (2..=4).contains(&plausible.len()) {
                     let mut scores: Vec<GearScore> = Vec::new();
                     for candidate in &plausible {
                         if let Some(score) = self.score_of(candidate, started).await {
@@ -401,7 +405,7 @@ mod tests {
     fn unknown_server_short_circuits_before_any_request() {
         // No client call can happen here: server_id returns None first.
         let mut service = ScoreService::new(&scratch_dir());
-        let result = tauri::async_runtime::block_on(service.lookup("Sins", "Nowhere", None, None));
+        let result = tauri::async_runtime::block_on(service.lookup("Sins", "Nowhere", None, None, false));
         assert!(result.score.is_none());
         assert_eq!(result.reason, "no_server", "an unknown server is not an ambiguity");
     }
@@ -418,12 +422,8 @@ mod tests {
     #[ignore]
     fn the_betelgeuse_who_killed_was_the_cleric_on_the_paired_server() {
         let mut service = ScoreService::new(&scratch_dir());
-        let reply = tauri::async_runtime::block_on(service.lookup(
-            "BeTeLGeuSe",
-            "Phernos",
-            None,
-            Some(40),
-        ));
+        let reply =
+            tauri::async_runtime::block_on(service.lookup("BeTeLGeuSe", "Phernos", None, Some(40), true));
         println!("floor 40: {:?}", reply);
         let score = reply.score.expect("the Cleric on Munin");
         assert_eq!(score.server, "Munin");
@@ -440,7 +440,8 @@ mod tests {
     #[ignore]
     fn leu_resolves_to_the_geared_one_on_ludra() {
         let mut service = ScoreService::new(&scratch_dir());
-        let reply = tauri::async_runtime::block_on(service.lookup("Leu", "Phernos", None, Some(40)));
+        let reply =
+            tauri::async_runtime::block_on(service.lookup("Leu", "Phernos", None, Some(40), true));
         println!("leu: {:?}", reply);
         let score = reply.score.expect("the Cleric on Ludra");
         assert_eq!(score.server, "Ludra");

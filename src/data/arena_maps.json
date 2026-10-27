@@ -1,0 +1,6 @@
+{
+  "_note": "Map ids that are the arena. 60 was seen on three separate zone loads during a session that contained arena matches, between two open-world loads of 1010.",
+  "maps": [
+    60
+  ]
+}
