@@ -235,6 +235,33 @@ pub fn exact_candidates(payload: &serde_json::Value, wanted: &str) -> Vec<Candid
     all
 }
 
+/// The combat power below which a level 45 is not really in the arena.
+///
+/// From the player: you cannot queue before level 45, and by then a character is
+/// worth at least about 35,000, so a number far under 40,000 in a match is almost
+/// always the wrong namesake. Used only as a tie-break between candidates that are
+/// otherwise indistinguishable.
+pub const ARENA_CP_FLOOR: i64 = 40_000;
+
+/// Which of these scores is the only one plausible for an arena player?
+///
+/// Returns an index only when exactly one candidate reaches `floor` and at least one
+/// other does not. Anything less clear than that stays a dash: a name with four
+/// geared namesakes is still a guess.
+pub fn unique_above(scores: &[GearScore], floor: i64) -> Option<usize> {
+    let above: Vec<usize> = scores
+        .iter()
+        .enumerate()
+        .filter(|(_, score)| score.combat_power.is_some_and(|cp| cp >= floor))
+        .map(|(index, _)| index)
+        .collect();
+    if above.len() == 1 && scores.len() > 1 {
+        Some(above[0])
+    } else {
+        None
+    }
+}
+
 /// What to do with a set of exact name matches.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Plan {
@@ -691,6 +718,42 @@ mod tests {
         });
         let found = exact_candidates(&payload, "betelgeuse");
         assert_eq!(found.len(), 1, "case is evidence, not a requirement");
+    }
+
+    fn geared(name: &str, server: &str, class: &str, combat_power: i64, item_level: u32) -> GearScore {
+        GearScore {
+            name: name.into(),
+            server: server.into(),
+            race: Some(2),
+            class_name: Some(class.into()),
+            level: Some(45),
+            item_level: Some(item_level),
+            combat_power: Some(combat_power),
+        }
+    }
+
+    #[test]
+    fn the_one_arena_geared_candidate_wins_a_shared_name() {
+        // Leu, the match that prompted this: a level 45 Chanter on Agnita at 37,031
+        // and a level 45 Cleric on Ludra at 77,671. Nothing else separated them.
+        let chanter = geared("Leu", "Agnita", "Chanter", 37_031, 740);
+        let cleric = geared("Leu", "Ludra", "Cleric", 77_671, 1699);
+
+        assert_eq!(
+            unique_above(&[chanter.clone(), cleric], ARENA_CP_FLOOR),
+            Some(1),
+            "Ludra, the only one above the arena floor"
+        );
+
+        // The rule is about gear, not about the server: one under-geared name and
+        // one geared one means the geared one is the arena player.
+        let other = geared("Leu", "Agnita", "Chanter", 55_000, 900);
+        assert_eq!(unique_above(&[geared("Leu", "Kasaka", "Gladiator", 4_666, 24), other], ARENA_CP_FLOOR), Some(1));
+
+        // Two geared namesakes stay a guess.
+        let first = geared("Leu", "Agnita", "Chanter", 55_000, 900);
+        let second = geared("Leu", "Ludra", "Cleric", 77_671, 1699);
+        assert_eq!(unique_above(&[first, second], ARENA_CP_FLOOR), None);
     }
 
     #[test]

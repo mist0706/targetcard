@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 
 use super::score::{
     exact_candidates, info_url, parse_score, plan, same_class, search_url, server_id, Candidate,
-    GearScore, Plan, ScoreReply, ORIGIN, REFERER, SEARCH_SIZE,
+    GearScore, Plan, ScoreReply, ARENA_CP_FLOOR, ORIGIN, REFERER, SEARCH_SIZE,
+    unique_above,
 };
 
 const TTL_SECS: u64 = 6 * 3600;
@@ -267,6 +268,32 @@ impl ScoreService {
                 }
             }
             Plan::GiveUp => {
+                // Last resort before a dash: if only one of these players is geared
+                // enough to be in a match, it is that one. Leu on Ludra at 77,671
+                // against Leu on Agnita at 37,031 is this case exactly.
+                let plausible: Vec<&Candidate> = rest
+                    .iter()
+                    .filter(|candidate| candidate.level >= floor)
+                    .collect();
+                if (2..=4).contains(&plausible.len()) {
+                    let mut scores: Vec<GearScore> = Vec::new();
+                    for candidate in &plausible {
+                        if let Some(score) = self.score_of(candidate, started).await {
+                            scores.push(score);
+                        }
+                    }
+                    if scores.len() == plausible.len() {
+                        if let Some(index) = unique_above(&scores, ARENA_CP_FLOOR) {
+                            let score = scores.swap_remove(index);
+                            tracing::debug!(
+                                "targetcard: {name} -> {} ({}) the only one geared for a match",
+                                score.name,
+                                score.server
+                            );
+                            return Some(score);
+                        }
+                    }
+                }
                 tracing::warn!(
                     "targetcard: {name}: {} exact matches and nothing to tell them apart; not guessing",
                     candidates.len()
@@ -401,6 +428,23 @@ mod tests {
         let score = reply.score.expect("the Cleric on Munin");
         assert_eq!(score.server, "Munin");
         assert_eq!(score.class_name.as_deref(), Some("Cleric"));
-        assert_eq!(score.combat_power, Some(136_271));
+        // Their combat power moves as they gear up, so assert the shape of the answer,
+        // not the number of the day.
+        assert!(score.combat_power.is_some_and(|cp| cp >= ARENA_CP_FLOOR));
+    }
+
+    /// Against the live API: two level 45 Asmodians named Leu, on Agnita and Ludra.
+    /// Only one of them is geared enough to be in a match, so the tie-break settles it.
+    /// Ignored by default, needs the network: `cargo test -- --ignored leu`.
+    #[test]
+    #[ignore]
+    fn leu_resolves_to_the_geared_one_on_ludra() {
+        let mut service = ScoreService::new(&scratch_dir());
+        let reply = tauri::async_runtime::block_on(service.lookup("Leu", "Phernos", None, Some(40)));
+        println!("leu: {:?}", reply);
+        let score = reply.score.expect("the Cleric on Ludra");
+        assert_eq!(score.server, "Ludra");
+        assert_eq!(score.class_name.as_deref(), Some("Cleric"));
+        assert!(score.combat_power.is_some_and(|cp| cp >= ARENA_CP_FLOOR));
     }
 }
