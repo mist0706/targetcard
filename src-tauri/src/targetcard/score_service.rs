@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::score::{
     exact_candidates, info_url, parse_score, plan, same_class, search_url, server_id, Candidate,
-    GearScore, Plan, ScoreReply, ARENA_CP_FLOOR, ORIGIN, REFERER, SEARCH_SIZE,
+    server_name_for_id, GearScore, Plan, ScoreReply, ARENA_CP_FLOOR, ORIGIN, REFERER, SEARCH_SIZE,
     unique_above,
 };
 
@@ -89,9 +89,11 @@ impl ScoreService {
         class: Option<&str>,
         floor: Option<u32>,
         arena: bool,
+        known_server: Option<u16>,
     ) -> ScoreReply {
         let started = std::time::Instant::now();
-        if let Some(hit) = self.cached(name, server) {
+        let stated = known_server.and_then(server_name_for_id);
+        if let Some(hit) = self.cached(name, stated.unwrap_or(server)) {
             // A cached answer can be the wrong namesake: it was stored before the
             // level floor was known, or for a query that had no floor. If it cannot
             // be the player we are asking about, search again rather than hand back
@@ -106,7 +108,7 @@ impl ScoreService {
                 hit.level.unwrap_or(0)
             );
         }
-        let Some(id) = server_id(server) else {
+        let Some(id) = known_server.or_else(|| server_id(server)) else {
             tracing::warn!("targetcard: {name}: unknown server '{server}', nothing to look up");
             return ScoreReply::missing("no_server");
         };
@@ -114,7 +116,7 @@ impl ScoreService {
             return ScoreReply::missing("not_found");
         };
         let Some(score) = self
-            .resolve(name, id, class, floor.unwrap_or(0), arena, started, &candidates)
+            .resolve(name, id, class, floor.unwrap_or(0), arena, stated.is_some(), started, &candidates)
             .await
         else {
             return ScoreReply::missing("ambiguous");
@@ -165,9 +167,31 @@ impl ScoreService {
         class: Option<&str>,
         floor: u32,
         arena: bool,
+        server_stated: bool,
         started: std::time::Instant,
         candidates: &[Candidate],
     ) -> Option<GearScore> {
+        // The game said which server this player is on. Nothing else in this
+        // function matters: one name, one server, one character.
+        if server_stated {
+            if let Some(candidate) = candidates
+                .iter()
+                .filter(|c| c.server_id == local)
+                .max_by_key(|c| c.level)
+            {
+                tracing::debug!(
+                    "targetcard: {name} -> {} ({}) the game said which server",
+                    candidate.name,
+                    candidate.server
+                );
+                return self.score_of(candidate, started).await;
+            }
+            tracing::debug!(
+                "targetcard: {name}: the game said server {local} but the search has nobody there"
+            );
+            return None;
+        }
+
         let wanted_class = class.filter(|c| !c.trim().is_empty());
 
         // Who shares this name, and how high are they: the line that would have made
@@ -405,7 +429,7 @@ mod tests {
     fn unknown_server_short_circuits_before_any_request() {
         // No client call can happen here: server_id returns None first.
         let mut service = ScoreService::new(&scratch_dir());
-        let result = tauri::async_runtime::block_on(service.lookup("Sins", "Nowhere", None, None, false));
+        let result = tauri::async_runtime::block_on(service.lookup("Sins", "Nowhere", None, None, false, None));
         assert!(result.score.is_none());
         assert_eq!(result.reason, "no_server", "an unknown server is not an ambiguity");
     }
@@ -423,7 +447,7 @@ mod tests {
     fn the_betelgeuse_who_killed_was_the_cleric_on_the_paired_server() {
         let mut service = ScoreService::new(&scratch_dir());
         let reply =
-            tauri::async_runtime::block_on(service.lookup("BeTeLGeuSe", "Phernos", None, Some(40), true));
+            tauri::async_runtime::block_on(service.lookup("BeTeLGeuSe", "Phernos", None, Some(40), true, None));
         println!("floor 40: {:?}", reply);
         let score = reply.score.expect("the Cleric on Munin");
         assert_eq!(score.server, "Munin");
@@ -441,11 +465,32 @@ mod tests {
     fn leu_resolves_to_the_geared_one_on_ludra() {
         let mut service = ScoreService::new(&scratch_dir());
         let reply =
-            tauri::async_runtime::block_on(service.lookup("Leu", "Phernos", None, Some(40), true));
+            tauri::async_runtime::block_on(service.lookup("Leu", "Phernos", None, Some(40), true, None));
         println!("leu: {:?}", reply);
         let score = reply.score.expect("the Cleric on Ludra");
         assert_eq!(score.server, "Ludra");
         assert_eq!(score.class_name.as_deref(), Some("Cleric"));
         assert!(score.combat_power.is_some_and(|cp| cp >= ARENA_CP_FLOOR));
+    }
+
+    /// Against the live API: with the server the game stated, Leu resolves with no
+    /// floor, no arena flag and no tie-break. Ignored by default:
+    /// `cargo test -- --ignored stated`.
+    #[test]
+    #[ignore]
+    fn a_stated_server_needs_no_other_rule() {
+        let mut service = ScoreService::new(&scratch_dir());
+        let reply = tauri::async_runtime::block_on(service.lookup(
+            "Leu",
+            "Phernos",
+            None,
+            None,
+            false,
+            Some(2311),
+        ));
+        println!("stated 2311: {:?}", reply);
+        let score = reply.score.expect("the Cleric on Ludra");
+        assert_eq!(score.server, "Ludra");
+        assert_eq!(score.class_name.as_deref(), Some("Cleric"));
     }
 }

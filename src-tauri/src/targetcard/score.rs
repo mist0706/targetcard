@@ -395,6 +395,12 @@ pub fn server_short_name(id: u16) -> Option<&'static str> {
         .map(|server| server.short.as_str())
 }
 
+/// Is this a server the game actually has? Used to keep a two-byte guess honest:
+/// an id read out of a record only counts if it names one of the 46 EU servers.
+pub fn is_known_server(id: u16) -> bool {
+    SERVERS.iter().any(|server| server.id == id)
+}
+
 pub fn server_display_name(id: u16) -> Option<&'static str> {
     SERVERS
         .iter()

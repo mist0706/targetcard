@@ -939,6 +939,17 @@ impl StreamProcessor {
             self.data_storage.note_low_id_entity(id);
             self.data_storage
                 .append_nickname_authoritative(id, &sanitized);
+            // Another player's record carries their server too, a little past the
+            // name: `<...> 01 <server u16 LE> <class and level>`. Verified against
+            // three players whose servers the game states in its own match history
+            // (AJIXuMuK 2316, TankiNator 2308), and only accepted when the id names
+            // a real server. The local player's own record says it right after the
+            // name instead, which `self_profile` already reads.
+            if record.profile.is_none() {
+                if let Some(server) = record_server(data, record.field.end) {
+                    self.data_storage.note_player_server(&sanitized, server);
+                }
+            }
             if let Some((server, job)) = record.profile {
                 // The game's word on who you are replaces whatever name was
                 // configured. That name comes from the window title or the last
@@ -2770,6 +2781,25 @@ fn self_profile(data: &[u8], after: usize) -> Option<(u16, Option<JobClass>)> {
         .get(after + 2..after + 6)
         .and_then(|b| JobClass::from_roster_class(u32::from_le_bytes([b[0], b[1], b[2], b[3]])));
     (1000..3000).contains(&server).then_some((server, job))
+}
+
+/// The server id an other-player record states after the name.
+///
+/// Layout, as read off three records with a known answer: a `01` tag, then the
+/// server id as `u16` little-endian, then the class and level. Only ids that name a
+/// real server are accepted, which is what makes a two-byte read safe here.
+fn record_server(data: &[u8], after: usize) -> Option<u16> {
+    let window = data.get(after..(after + 120).min(data.len()))?;
+    for index in 0..window.len().saturating_sub(2) {
+        if window[index] != 0x01 {
+            continue;
+        }
+        let server = u16::from_le_bytes([window[index + 1], window[index + 2]]);
+        if crate::targetcard::score::is_known_server(server) {
+            return Some(server);
+        }
+    }
+    None
 }
 
 fn unicode_script(ch: char) -> UnicodeScript {
@@ -4958,5 +4988,36 @@ mod tests {
         assert_eq!((w.result, w.missing, w.end), (Outcome::Missed, 140, 5_000));
         assert_eq!(w.ended, End::Death);
         assert_eq!(storage.stagger_gauge(MINIBOSS), None);
+    }
+
+    fn hex_bytes(text: &str) -> Vec<u8> {
+        let clean: String = text.split_whitespace().collect();
+        (0..clean.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&clean[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn a_player_record_states_its_server() {
+        // The bytes that follow the name in two real records, with the answer the
+        // game itself gives in its match history: AJIXuMuK on 2316, TankiNator on 2308.
+        let ajix = hex_bytes(
+            "23000000 020100 92 19eae9c52c04a44300e07545000100900198559c5f250b0000 04000402003154ff010400f1 0034080000f049020001000000a0860104 0031f02b070400f30402fc696502539640010c090a11142113300bff0100ff0e8075d52abb03",
+        );
+        assert_eq!(record_server(&ajix, 0), Some(2316));
+
+        let tanki = hex_bytes(
+            "0b000000 020100 d20f5bdc45c8109042002076450000344300800 1a6d10300 40ba0b0000040004020031344702040000100 0b1f04902000100000 0a0860104 0031c3fb0904 00f10a0288e46302a4676502e51a5f010409 101012 844e00003880e42e00e4",
+        );
+        assert_eq!(record_server(&tanki, 0), Some(2308));
+    }
+
+    #[test]
+    fn a_number_that_is_not_a_server_is_not_read_as_one() {
+        // 0x0fff is inside the 1000..3000 range a naive read accepts, but no server
+        // has that id, so the read stops there.
+        let junk = hex_bytes("0000 01 ff0f 0000 0000");
+        assert_eq!(record_server(&junk, 0), None);
     }
 }

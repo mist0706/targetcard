@@ -36,6 +36,8 @@ pub struct PlayerCard {
     pub level: Option<u32>,
     pub gear_score: Option<i32>,
     pub combat_power: Option<i64>,
+    /// The server the game itself said this player is on, when it said one.
+    pub server_id: Option<u16>,
 }
 
 /// Build the card list for every known player character.
@@ -69,6 +71,7 @@ pub fn build_cards(
                 level: None,
                 gear_score: None,
                 combat_power: None,
+                server_id: None,
             })
         })
         .collect();

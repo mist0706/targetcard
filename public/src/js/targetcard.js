@@ -195,6 +195,7 @@
               class: classOf(name),
               floor: levelFloor(),
               arena: inArena,
+              knownServer: player.server_id ?? null,
             }),
             LOOKUP_TIMEOUT_MS,
           );

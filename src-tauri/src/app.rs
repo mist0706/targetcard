@@ -444,11 +444,19 @@ async fn targetcard_score(
     class: Option<String>,
     floor: Option<u32>,
     arena: Option<bool>,
+    known_server: Option<u16>,
 ) -> Result<crate::targetcard::score::ScoreReply, String> {
     let state = app.state::<crate::targetcard::score_service::ScoreServiceState>();
     let mut service = state.0.lock().await;
     Ok(service
-        .lookup(&name, &server, class.as_deref(), floor, arena.unwrap_or(false))
+        .lookup(
+            &name,
+            &server,
+            class.as_deref(),
+            floor,
+            arena.unwrap_or(false),
+            known_server,
+        )
         .await)
 }
 
