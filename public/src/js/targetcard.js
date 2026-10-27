@@ -172,7 +172,9 @@
     if (scores.has(key) || queued.has(key)) return;
     if ((retryAt.get(key) ?? 0) > Date.now()) return; // still cooling down
     queued.add(key);
-    queue.push(player.name);
+    // The server travels with the name: the game states it in the player's own
+    // record, and when it does the lookup needs nothing else.
+    queue.push({ name: player.name, serverId: player.server_id ?? null });
     pump();
   }
 
@@ -181,7 +183,8 @@
     pumping = true;
     try {
       while (inFlight < MAX_LOOKUPS && queue.length) {
-        const name = queue.shift();
+        const item = queue.shift();
+        const name = item.name;
         const key = name.toLowerCase();
         inFlight += 1;
         try {
@@ -195,7 +198,7 @@
               class: classOf(name),
               floor: levelFloor(),
               arena: inArena,
-              knownServer: player.server_id ?? null,
+              knownServer: item.serverId,
             }),
             LOOKUP_TIMEOUT_MS,
           );
