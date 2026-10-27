@@ -96,8 +96,16 @@
     cls.append(dot, label);
     const cp = document.createElement("span");
     cp.className = "cp";
-    row.append(name, cls, cp);
-    return { row, name, dot, label, cp };
+    const ilvl = document.createElement("span");
+    ilvl.className = "ilvl";
+    row.append(name, cls, cp, ilvl);
+    // A drag region applies to the element it is on, not to the elements inside it.
+    // Without this the only draggable pixels were the header and the gaps between
+    // rows, which is why the window barely moved.
+    for (const part of [row, name, cls, dot, label, cp, ilvl]) {
+      part.setAttribute("data-tauri-drag-region", "");
+    }
+    return { row, name, dot, label, cp, ilvl };
   }
 
   function render() {
@@ -138,6 +146,11 @@
       parts.dot.className = `dot ${dotClass}`;
       parts.label.className = `clabel ${dotClass}`;
       parts.label.textContent = cls || (waiting ? "…" : "—");
+
+      // Item level, which says more about a character than combat power alone: the
+      // party roster states it directly, and the web answer carries it.
+      const itemLevel = player.gear_score ?? score?.item_level ?? null;
+      parts.ilvl.textContent = itemLevel != null ? String(itemLevel) : "—";
 
       const power = player.combat_power ?? score?.combat_power ?? null;
       if (power != null) {

@@ -14,6 +14,8 @@ body {
 }
 
 .panel {
+  /* The whole panel drags, so say so with the cursor. */
+  cursor: grab;
   box-sizing: border-box;
   margin: 6px;
   padding: 7px 9px 6px;
@@ -27,7 +29,7 @@ body {
 .head,
 .row {
   display: grid;
-  grid-template-columns: 1fr 88px 58px;
+  grid-template-columns: 1fr 82px 56px 46px;
   align-items: center;
   column-gap: 8px;
 }
@@ -42,11 +44,19 @@ body {
 }
 
 .head .h-cp,
-.row .cp {
+.row .cp,
+.head .h-ilvl,
+.row .ilvl {
   text-align: right;
 }
 
+.row .ilvl {
+  color: #9aa3b8;
+  font-variant-numeric: tabular-nums;
+}
+
 .row {
+  cursor: grab;
   padding: 4px 2px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }

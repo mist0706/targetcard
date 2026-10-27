@@ -7,14 +7,17 @@
     <link rel="stylesheet" href="/src/js/targetcard.css" />
   </head>
   <body>
-    <!-- The players table. Drag anywhere on the panel to move it. -->
+    <!-- The players table. Every part of it drags: the panel, the header, the rows
+         and each cell in them, because a drag region is the element it is set on and
+         not the elements inside it. -->
     <div class="panel" data-tauri-drag-region>
       <div class="head" data-tauri-drag-region>
         <span class="h-name">name</span>
         <span class="h-class">class</span>
         <span class="h-cp">cp</span>
+        <span class="h-ilvl">ilvl</span>
       </div>
-      <div class="rows" id="tc-rows">
+      <div class="rows" id="tc-rows" data-tauri-drag-region>
         <div class="empty" data-tauri-drag-region>waiting for players</div>
       </div>
     </div>
