@@ -96,9 +96,9 @@ body {
   text-transform: uppercase;
   padding: 2px 7px 1px;
   border-radius: 3px;
-  border: 1px solid rgba(255, 255, 255, 0.13);
-  background: rgba(255, 255, 255, 0.035);
-  color: #79839a;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.02);
+  color: #6f7889;
   transition: color 140ms ease, background 140ms ease, border-color 140ms ease;
 }
 
