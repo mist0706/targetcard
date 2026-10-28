@@ -295,6 +295,17 @@
     return selfLevel - 5;
   }
 
+  /// Nothing in this page may fail silently. An uncaught error at the top level
+  /// stops the polling loop, and a stopped loop and a crashed window look the same
+  /// from outside: a table that never updates.
+  window.addEventListener("error", (event) => {
+    report(`uncaught: ${event.message} (${event.filename}:${event.lineno})`);
+  });
+  window.addEventListener("unhandledrejection", (event) => {
+    const reason = event.reason;
+    report(`unhandled rejection: ${reason?.message ?? String(reason)}`);
+  });
+
   /// Report a page-side failure to the app log. Best effort: if this call itself
   /// fails there is nowhere left to say so.
   function report(message) {

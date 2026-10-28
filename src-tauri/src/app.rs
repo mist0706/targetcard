@@ -2436,6 +2436,33 @@ window.__A2_VIEW__ = 'settings';
 })();
 "#;
 
+/// How many times the card may be rebuilt after being destroyed. One is enough for a
+/// crash that happened once; two tells us in the log that it is going in circles.
+static TARGETCARD_REBUILDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Build the player card window. Used for the reopen after a destroy, so the window
+/// is described in one place instead of drifting between the config and here.
+fn build_targetcard_window(app: &tauri::AppHandle) -> Result<(), String> {
+    let window = tauri::WebviewWindowBuilder::new(
+        app,
+        "targetcard",
+        tauri::WebviewUrl::App("targetcard.html".into()),
+    )
+    .title("targetcard")
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .resizable(false)
+    .skip_taskbar(true)
+    .shadow(false)
+    .inner_size(420.0, 306.0)
+    .position(40.0, 160.0)
+    .build()
+    .map_err(|e| e.to_string())?;
+    let _ = restore_window_geometry(app, &window, "targetcard");
+    Ok(())
+}
+
 fn build_settings_window(app: &tauri::AppHandle) -> Result<(), String> {
     platform::window_startup::begin_settings_load();
     let (x, y, _, _) = birth_place(app, Some("settings"), (760.0, 820.0), false);
@@ -3257,6 +3284,34 @@ pub fn run() {
                 && TOOL_WINDOWS.contains(&window.label())
             {
                 save_tool_window_geometry(window.app_handle(), window.label());
+            }
+            // The card is a borderless, transparent, always-on-top window: if it is
+            // destroyed or closed the player sees it simply vanish, with nothing in
+            // the log to say why. Record its lifecycle so the next report of "it
+            // crashed" has a line to point at.
+            if window.label() == "targetcard"
+                && matches!(
+                    event,
+                    tauri::WindowEvent::Destroyed | tauri::WindowEvent::CloseRequested { .. }
+                )
+            {
+                tracing::warn!("targetcard window: {event:?}");
+                // Only a destroy while the meter is still running is worth undoing:
+                // on the way out every window goes, and rebuilding one there would
+                // leave the process alive with nothing else in it.
+                if matches!(event, tauri::WindowEvent::Destroyed)
+                    && window.app_handle().get_webview_window("main").is_some()
+                    && TARGETCARD_REBUILDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst) < 2
+                {
+                    let handle = window.app_handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                        match build_targetcard_window(&handle) {
+                            Ok(()) => tracing::warn!("targetcard window: rebuilt after being destroyed"),
+                            Err(error) => tracing::error!("targetcard window: could not rebuild it: {error}"),
+                        }
+                    });
+                }
             }
             if let tauri::WindowEvent::Focused(focused) = event
                 && (TOOL_WINDOWS.contains(&window.label()) || window.label().starts_with("details-"))
