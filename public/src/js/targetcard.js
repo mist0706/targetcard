@@ -47,6 +47,7 @@
   let inAbyss = false;
   let inArena = false;
   let abyssPartner = null;
+  let pollTimer = null;
   let selfRace = null;
   let selfLevel = null;
   let askingSelf = false;
@@ -316,6 +317,15 @@
     }
   }
 
+  /// The card hides with the meter when the game is not in front, and a hidden
+  /// window has its timers throttled: the table then sits frozen until its next
+  /// slot, which reads as a crash. Coming back into view polls at once.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) return;
+    if (pollTimer) clearTimeout(pollTimer);
+    tick();
+  });
+
   async function tick() {
     try {
       const snapshot = await withTimeout(invoke("targetcard_snapshot"), LOOKUP_TIMEOUT_MS);
@@ -337,7 +347,7 @@
       console.error("targetcard: snapshot failed", error);
       report(`snapshot failed: ${error?.message ?? error}`);
     } finally {
-      setTimeout(tick, POLL_MS);
+      pollTimer = setTimeout(tick, POLL_MS);
     }
   }
 
