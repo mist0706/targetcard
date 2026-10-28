@@ -14,7 +14,7 @@
 //! has not fought yet, and the second catches a party member announced only
 //! through damage. A mob is in neither.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use serde::Serialize;
 
@@ -67,14 +67,26 @@ fn is_present(storage: &DataStorage, card: &PlayerCard, now: i64) -> bool {
 
 /// The most recently appeared players, newest first.
 ///
-/// Entity ids are handed out in spawn order, so the highest ids are the latest
-/// arrivals. `build_cards` already sorts by name for the card list, so this is
-/// the one place that ordering gets undone.
-pub fn recent_players(cards: &[PlayerCard], limit: usize) -> Vec<PlayerCard> {
+/// Ordered by when the meter first saw each entity in this zone, which is the
+/// arrival the table is about. Entity ids are a good approximation, since they are
+/// handed out in spawn order, but they are reused and reissued on a zone change, so
+/// an id only breaks a tie.
+pub fn recent_players(cards: &[PlayerCard], limit: usize, first_seen: &HashMap<i32, i64>) -> Vec<PlayerCard> {
     let mut recent: Vec<PlayerCard> = cards.iter().filter(|card| !card.is_self).cloned().collect();
-    recent.sort_by_key(|card| std::cmp::Reverse(card.entity_id));
+    recent.sort_by_key(|card| {
+        let at = first_seen.get(&card.entity_id).copied().unwrap_or(0);
+        (std::cmp::Reverse(at), std::cmp::Reverse(card.entity_id))
+    });
     recent.truncate(limit);
     recent
+}
+
+/// Every player's first-seen time, for `recent_players`.
+fn first_seen_map(cards: &[PlayerCard], storage: &DataStorage) -> HashMap<i32, i64> {
+    cards
+        .iter()
+        .filter_map(|card| storage.entity_first_seen(card.entity_id).map(|at| (card.entity_id, at)))
+        .collect()
 }
 
 /// Player ids: authoritative identity records plus confirmed player actors.
@@ -149,7 +161,7 @@ pub fn snapshot(storage: &DataStorage) -> TargetSnapshot {
         .filter(|card| is_present(storage, card, now))
         .cloned()
         .collect();
-    let recent = recent_players(&visible, RECENT_LIMIT);
+    let recent = recent_players(&visible, RECENT_LIMIT, &first_seen_map(&visible, storage));
     let server_name = storage
         .local_character_name()
         .map(|name| storage.player_server(&name))
@@ -187,6 +199,21 @@ mod tests {
             .map(|card| card.name)
             .collect();
         assert_eq!(names, vec!["Sins", "Alpha", "Miku"]);
+    }
+
+    #[test]
+    fn the_newest_arrival_is_the_one_that_arrived_last_not_the_highest_id() {
+        // Entity ids are reused and reissued, so an id can be low and still be the
+        // newest arrival: this is the row the table marks, so it has to be right.
+        let storage = DataStorage::new();
+        // Being named is the first sighting, so the gap has to sit between the two.
+        storage.append_nickname_authoritative(20, "Older");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        storage.append_nickname_authoritative(10, "Newer");
+
+        let recent = snapshot(&storage).recent;
+        assert_eq!(recent[0].name, "Newer", "the latest arrival leads the table");
+        assert_eq!(recent[1].name, "Older");
     }
 
     #[test]

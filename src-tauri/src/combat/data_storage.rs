@@ -552,6 +552,10 @@ pub struct DataStorage {
     /// times a second and readers of `inner` should not queue behind it. Never
     /// held at the same time as `inner`, which is what keeps the order fixed.
     entity_seen: Mutex<HashMap<i32, i64>>,
+    /// When each entity was first seen in this zone. Entity ids are handed out in
+    /// spawn order and get reused, so the id is an approximation of who arrived
+    /// last; this is the actual answer.
+    entity_first_seen: Mutex<HashMap<i32, i64>>,
 }
 
 /// The timeline and when it was last pruned.
@@ -887,6 +891,7 @@ impl DataStorage {
             abnormals: Mutex::new(AbnormalLog { timeline: abnormal::Timeline::default(), pruned_ms: NEVER_MS }),
             stagger: Mutex::new(StaggerLog::default()),
             entity_seen: Mutex::new(HashMap::new()),
+            entity_first_seen: Mutex::new(HashMap::new()),
         }
     }
 
@@ -1941,7 +1946,14 @@ impl DataStorage {
         if !known {
             return;
         }
-        self.entity_seen.lock().insert(id, now_ms());
+        let now = now_ms();
+        self.entity_seen.lock().insert(id, now);
+        self.entity_first_seen.lock().entry(id).or_insert(now);
+    }
+
+    /// When this entity first appeared in this zone, in clock ms.
+    pub fn entity_first_seen(&self, id: i32) -> Option<i64> {
+        self.entity_first_seen.lock().get(&id).copied()
     }
 
     /// When this entity was last seen, in clock ms. `None` means no traffic
@@ -2192,6 +2204,7 @@ impl DataStorage {
         // A load puts us somewhere else: nobody in a players table was here a
         // moment ago. Cleared before the write lock, never under it.
         self.entity_seen.lock().clear();
+        self.entity_first_seen.lock().clear();
         let mut inner = self.inner.write();
         // A load hands out new entity ids: counts of the old ones would name
         // an entity that is gone.
