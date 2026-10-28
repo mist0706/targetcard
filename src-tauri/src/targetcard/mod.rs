@@ -38,6 +38,8 @@ pub struct PlayerCard {
     pub combat_power: Option<i64>,
     /// The server the game itself said this player is on, when it said one.
     pub server_id: Option<u16>,
+    /// Its three letter tag, e.g. PHE.
+    pub server_short: Option<String>,
 }
 
 /// Build the card list for every known player character.
@@ -72,6 +74,7 @@ pub fn build_cards(
                 gear_score: None,
                 combat_power: None,
                 server_id: None,
+                server_short: None,
             })
         })
         .collect();

@@ -88,6 +88,10 @@
     row.className = "row";
     const name = document.createElement("span");
     name.className = "name";
+    const nameText = document.createTextNode("");
+    const tag = document.createElement("i");
+    tag.className = "srv";
+    name.append(nameText, tag);
     const cls = document.createElement("span");
     cls.className = "class";
     const dot = document.createElement("i");
@@ -106,7 +110,7 @@
     for (const part of [row, name, cls, dot, label, cp, ilvl]) {
       part.setAttribute("data-tauri-drag-region", "");
     }
-    return { row, name, dot, label, cp, ilvl };
+    return { row, name, nameText, tag, dot, label, cp, ilvl };
   }
 
   function render() {
@@ -123,8 +127,7 @@
         rows.set(player.entity_id, parts);
       }
 
-      parts.name.textContent = player.name;
-      parts.name.title = player.name;
+      parts.nameText.nodeValue = player.name;
       parts.row.classList.toggle("fresh", index === 0);
 
       const key = player.name.toLowerCase();
@@ -152,6 +155,12 @@
       // party roster states it directly, and the web answer carries it.
       const itemLevel = player.gear_score ?? score?.item_level ?? null;
       parts.ilvl.textContent = itemLevel != null ? String(itemLevel) : "—";
+
+      // The server tag is what lets you check the card against your own screen:
+      // the game prints (PHE) beside a name, so the table does too.
+      const tag = score?.server_short ?? player.server_short ?? null;
+      parts.tag.textContent = tag ? ` (${tag})` : "";
+      parts.name.title = tag ? `${player.name} (${tag})` : player.name;
 
       const power = player.combat_power ?? score?.combat_power ?? null;
       if (power != null) {

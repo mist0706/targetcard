@@ -29,7 +29,7 @@ body {
 .head,
 .row {
   display: grid;
-  grid-template-columns: 1fr 82px 56px 46px;
+  grid-template-columns: 1fr 78px 54px 44px;
   align-items: center;
   column-gap: 8px;
 }
@@ -46,6 +46,18 @@ body {
 .head .h-cp,
 .row .cp,
 .head .h-ilvl,
+.row .srv {
+  font-style: normal;
+  color: #7f8aa5;
+  font-size: 11px;
+}
+
+.row .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .row .ilvl {
   text-align: right;
 }

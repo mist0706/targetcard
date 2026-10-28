@@ -55,6 +55,8 @@ pub const EU_SERVERS: &[(&str, u16)] = &[
 pub struct GearScore {
     pub name: String,
     pub server: String,
+    /// The three letter tag the game prints beside a name, e.g. PHE for Phernos.
+    pub server_short: Option<String>,
     /// Faction: 1 Elyos, 2 Asmodian, as the API states it. The card uses it to
     /// show only hostiles in the Abyss.
     pub race: Option<u8>,
@@ -451,6 +453,7 @@ pub fn parse_score(payload: &serde_json::Value) -> Option<GearScore> {
     Some(GearScore {
         name,
         server,
+        server_short: None,
         // The info payload does not carry a faction; the service fills this in
         // from the search row that led here.
         race: None,
@@ -736,6 +739,7 @@ mod tests {
         GearScore {
             name: name.into(),
             server: server.into(),
+            server_short: None,
             race: Some(2),
             class_name: Some(class.into()),
             level: Some(45),

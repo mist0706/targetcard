@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use super::score::{
     exact_candidates, info_url, parse_score, plan, same_class, search_url, server_id, Candidate,
-    server_name_for_id, GearScore, Plan, ScoreReply, ARENA_CP_FLOOR, ORIGIN, REFERER, SEARCH_SIZE,
+    server_name_for_id, server_short_name, GearScore, Plan, ScoreReply, ARENA_CP_FLOOR, ORIGIN, REFERER, SEARCH_SIZE,
     unique_above,
 };
 
@@ -340,6 +340,9 @@ impl ScoreService {
             .await?;
         let mut score = parse_score(&payload)?;
         score.race = candidate.race;
+        // The tag the game prints beside the name, so the table can show which
+        // server the answer came from.
+        score.server_short = server_short_name(candidate.server_id).map(str::to_string);
         tracing::debug!(
             "targetcard: {} ({}) CP {:?} in {:?}",
             candidate.name,
@@ -386,6 +389,7 @@ mod tests {
         GearScore {
             name: "Sins".into(),
             server: "Phernos".into(),
+            server_short: Some("PHE".into()),
             race: Some(1),
             class_name: Some("Assassin".into()),
             level: Some(45),
