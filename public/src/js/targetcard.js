@@ -315,6 +315,9 @@
       abyssPartner = snapshot?.abyss_partner ?? null;
       render();
       askSelf(snapshot?.local_name, snapshot?.server_name);
+      // The Abyss key: lit red while the game says you are there, quiet otherwise.
+      const abyss = document.getElementById("tc-abyss");
+      if (abyss) abyss.classList.toggle("on", inAbyss);
 
       for (const player of lastRecent) {
         if (player.combat_power == null) enqueue(player);

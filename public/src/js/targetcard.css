@@ -18,12 +18,13 @@ body {
   cursor: grab;
   box-sizing: border-box;
   margin: 6px;
-  padding: 7px 9px 6px;
-  border-radius: 9px;
-  background: rgba(14, 15, 22, 0.82);
-  border: 1px solid rgba(120, 140, 255, 0.28);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
-  backdrop-filter: blur(6px);
+  padding: 7px 9px 5px;
+  border-radius: var(--rounded, 8px);
+  /* The meter's own window colour and alpha, so the two read as the same tool:
+     --hud-bg 9,13,24 at --window-opacity (0.4 is the meter's design default). */
+  background: rgba(var(--hud-bg, 9, 13, 24), var(--window-opacity, 0.4));
+  border: 1px solid rgba(255, 255, 255, min(0.14, calc(var(--window-opacity, 0.4) * 0.2)));
+  box-shadow: 0 8px 28px rgba(0, 0, 0, calc(var(--window-opacity, 0.4) * 0.45));
 }
 
 .head,
@@ -36,7 +37,7 @@ body {
 
 .head {
   padding: 0 2px 5px;
-  border-bottom: 1px solid rgba(120, 140, 255, 0.22);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   font-size: 9.5px;
   letter-spacing: 0.10em;
   text-transform: uppercase;
@@ -70,16 +71,47 @@ body {
 .row {
   cursor: grab;
   padding: 4px 2px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.045);
 }
 
 .row:last-child {
   border-bottom: 0;
 }
 
+/* The status strip, in the shape of the meter's own BOSS / DPS boxes: a small
+   uppercase key that is lit when the state is on and quiet when it is not. */
+.status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  padding: 4px 2px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.pill {
+  font-style: normal;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 2px 7px 1px;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  background: rgba(255, 255, 255, 0.035);
+  color: #79839a;
+  transition: color 140ms ease, background 140ms ease, border-color 140ms ease;
+}
+
+.pill.on {
+  border-color: rgba(255, 96, 96, 0.55);
+  background: rgba(200, 52, 52, 0.24);
+  color: #ff9a9a;
+  box-shadow: inset 0 0 7px rgba(255, 78, 78, 0.22);
+}
+
 /* The newest arrival, so the row you just saw appear is obvious. */
 .row.fresh {
-  background: rgba(120, 140, 255, 0.10);
+  background: rgba(255, 255, 255, 0.055);
   border-radius: 4px;
 }
 
