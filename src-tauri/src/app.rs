@@ -219,6 +219,20 @@ fn hide_with_meter(app: &tauri::AppHandle, hidden: &mut std::collections::HashSe
     }
 }
 
+/// Force a window that was hidden with SW_HIDE to paint again.
+///
+/// WebView2 keeps its surface across a raw hide and does not always paint on the way
+/// back: the window is there, topmost and receiving input, showing whatever was in
+/// the buffer or nothing at all. A one pixel resize and back is what makes it redraw.
+fn nudge_redraw(window: &tauri::WebviewWindow) {
+    if let Ok(size) = window.inner_size() {
+        if size.width > 2 && size.height > 2 {
+            let _ = window.set_size(tauri::PhysicalSize::new(size.width + 1, size.height));
+            let _ = window.set_size(tauri::PhysicalSize::new(size.width, size.height));
+        }
+    }
+}
+
 /// Show again those `hide_with_meter` hid.
 fn show_with_meter(app: &tauri::AppHandle, hidden: &mut std::collections::HashSet<String>) {
     for label in hidden.drain() {
@@ -230,6 +244,7 @@ fn show_with_meter(app: &tauri::AppHandle, hidden: &mut std::collections::HashSe
         if !platform::window::reveal_in_place(&window) {
             platform::window::show_on_top_without_focus(&window);
         }
+        nudge_redraw(&window);
         crate::plugins::widgets::relock(app, &window);
     }
 }
@@ -3875,6 +3890,20 @@ pub fn run() {
                                 others_delay = 0;
                                 if !hidden_with_meter.is_empty() {
                                     show_with_meter(&handle, &mut hidden_with_meter);
+                                }
+                                // The card is the one window whose absence is
+                                // invisible as a failure and obvious as a bug: it
+                                // is not in the taskbar, so a hidden one looks like
+                                // a crash. Put it back whenever the game is in
+                                // front, whoever thought it should be hidden.
+                                // Unconditional: tao's visible flag is not written by
+                                // the raw ShowWindow this app hides with, so asking
+                                // the window whether it is hidden answers wrong.
+                                // Showing a visible window is harmless; not showing
+                                // a hidden one is the bug being fixed.
+                                if let Some(card) = handle.get_webview_window("targetcard") {
+                                    platform::window::show_on_top_without_focus(&card);
+                                    nudge_redraw(&card);
                                 }
                             } else {
                                 others_delay += 1;
