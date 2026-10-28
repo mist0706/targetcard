@@ -762,6 +762,10 @@ struct Inner {
     /// and comes back with the next self record: a fight saved in between is
     /// still yours, on your server. See `fight_server_id`.
     self_server: u16,
+    /// Which servers hostile players came from while the player was in the Abyss,
+    /// and how often. The pairing is not a constant: NC switched Phernos's Abyss
+    /// partner once already, so this is read off the traffic rather than assumed.
+    abyss_servers: HashMap<u16, u32>,
     /// The class and level your own self record last stated, with the name it
     /// was for, so a character switch does not carry the last one's over.
     self_profile: Option<(String, Option<JobClass>, Option<u32>)>,
@@ -870,6 +874,7 @@ impl DataStorage {
                 loot_identity: LootIdentity::default(),
                 player_servers: HashMap::new(),
                 self_server: 0,
+                abyss_servers: HashMap::new(),
                 self_profile: None,
                 self_gear_score: None,
                 self_combat_power: None,
@@ -1326,11 +1331,29 @@ impl DataStorage {
         if !(1000..3000).contains(&server_id) {
             return;
         }
+        // Read before the write lock: this answers from the same lock.
+        let in_abyss = self.in_abyss();
         let mut inner = self.inner.write();
         // Bounded: one entry per character met, and a session meets hundreds.
         if inner.player_servers.len() < 10_000 || inner.player_servers.contains_key(name) {
             inner.player_servers.insert(name.to_string(), server_id);
         }
+        // In the Abyss the people you meet are from the matched server. Counting
+        // them is how the card learns which one that is now, instead of trusting a
+        // pair that NC is free to change.
+        if in_abyss && server_id != inner.self_server && server_id != 0 {
+            *inner.abyss_servers.entry(server_id).or_insert(0) += 1;
+        }
+    }
+
+    /// The server Abyss opponents are coming from, most seen first.
+    pub fn abyss_partner(&self) -> Option<u16> {
+        let inner = self.inner.read();
+        inner
+            .abyss_servers
+            .iter()
+            .max_by_key(|(server, count)| (**count, **server))
+            .map(|(server, _)| *server)
     }
 
     /// `name`'s home server, if a self or loot record has stated it; else 0.
@@ -3593,6 +3616,28 @@ mod tests {
         assert_eq!(s.zone_generations().1, at_start + 2, "go again: the same dungeon loaded again");
         s.note_map_load(open);
         assert_eq!(s.zone_generations(), (5, at_start + 3), "back to the open world");
+    }
+
+    #[test]
+    fn abyss_opponents_teach_the_card_which_server_they_come_from() {
+        use crate::capture::abyss_artifacts::ArtifactState;
+        let s = DataStorage::new();
+        s.note_self_server(1313);
+        s.note_abyss_artifacts(ArtifactState { wars: Vec::new(), artifacts: Vec::new() });
+        assert!(s.in_abyss(), "artifacts are what says so");
+
+        // Three opponents from one server, one from another: the frequent one wins.
+        s.note_player_server("One", 2305);
+        s.note_player_server("Two", 2307);
+        s.note_player_server("Three", 2305);
+        s.note_player_server("Four", 2305);
+        assert_eq!(s.abyss_partner(), Some(2305));
+
+        // Ourselves are not an opponent, and outside the Abyss nothing is counted.
+        let quiet = DataStorage::new();
+        quiet.note_self_server(1313);
+        quiet.note_player_server("Someone", 2311);
+        assert_eq!(quiet.abyss_partner(), None, "not in the Abyss, so not learned");
     }
 
     #[test]

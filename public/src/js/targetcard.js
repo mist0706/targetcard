@@ -46,6 +46,7 @@
   // costs one lookup of our own name and is then remembered for the session.
   let inAbyss = false;
   let inArena = false;
+  let abyssPartner = null;
   let selfRace = null;
   let selfLevel = null;
   let askingSelf = false;
@@ -212,6 +213,7 @@
               floor: levelFloor(),
               arena: inArena,
               knownServer: item.serverId,
+              partner: abyssPartner,
             }),
             LOOKUP_TIMEOUT_MS,
           );
@@ -253,6 +255,7 @@
           class: null,
           floor: null,
           arena: false,
+          partner: null,
         }),
         LOOKUP_TIMEOUT_MS,
       );
@@ -300,6 +303,7 @@
       lastRecent = snapshot?.recent || [];
       inAbyss = !!snapshot?.in_abyss;
       inArena = !!snapshot?.in_arena;
+      abyssPartner = snapshot?.abyss_partner ?? null;
       render();
       askSelf(snapshot?.local_name, snapshot?.server_name);
 

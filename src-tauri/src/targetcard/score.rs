@@ -292,7 +292,13 @@ pub enum Plan {
 ///
 /// Rule 2 is not a detail. Without it a name with one match anywhere in EU came
 /// back as a dash, which is how an entire arena roster turned into dashes.
-pub fn plan(candidates: &[Candidate], local: u16, has_class: bool, floor: u32) -> Plan {
+pub fn plan(
+    candidates: &[Candidate],
+    local: u16,
+    has_class: bool,
+    floor: u32,
+    partner: Option<u16>,
+) -> Plan {
     if candidates.is_empty() {
         return Plan::GiveUp;
     }
@@ -306,7 +312,7 @@ pub fn plan(candidates: &[Candidate], local: u16, has_class: bool, floor: u32) -
         .map(|(index, _)| index)
         .collect();
     if plausible.is_empty() {
-        return plan(candidates, local, has_class, 0);
+        return plan(candidates, local, has_class, 0, partner);
     }
     if let Some(index) = plausible
         .iter()
@@ -316,7 +322,7 @@ pub fn plan(candidates: &[Candidate], local: u16, has_class: bool, floor: u32) -
     {
         return Plan::Use(index);
     }
-    if let Some(partner) = paired_server(local) {
+    if let Some(partner) = partner.or_else(|| paired_server(local)) {
         if let Some(index) = plausible
             .iter()
             .copied()
@@ -619,7 +625,7 @@ mod tests {
     #[test]
     fn the_players_own_server_wins() {
         let candidates = exact_candidates(&tails_payload(), "Tails");
-        let picked = chosen(&candidates, plan(&candidates, 2310, false, 0));
+        let picked = chosen(&candidates, plan(&candidates, 2310, false, 0, None));
         assert_eq!(picked.server, "Hadala");
         assert_eq!(picked.level, 33);
     }
@@ -629,10 +635,10 @@ mod tests {
         // This is the report that started it: five level 45 players named Tails
         // on other servers, and Phernos had nobody of that name.
         let candidates = exact_candidates(&tails_payload(), "Tails");
-        assert_eq!(plan(&candidates, 1313, false, 0), Plan::GiveUp);
+        assert_eq!(plan(&candidates, 1313, false, 0, None), Plan::GiveUp);
 
         // With no idea which server we are on, it is no better.
-        assert_eq!(plan(&candidates, 9999, false, 0), Plan::GiveUp);
+        assert_eq!(plan(&candidates, 9999, false, 0, None), Plan::GiveUp);
     }
 
     #[test]
@@ -642,7 +648,7 @@ mod tests {
             {"name": "<strong>Mikuwuu</strong>", "characterId": "y", "level": 12, "serverId": 1313, "serverName": "Phernos"}
         ]});
         let candidates = exact_candidates(&payload, "Mikuwu");
-        let picked = chosen(&candidates, plan(&candidates, 1313, false, 0));
+        let picked = chosen(&candidates, plan(&candidates, 1313, false, 0, None));
         assert_eq!(picked.server, "Zikel");
     }
 
@@ -652,7 +658,7 @@ mod tests {
             {"name": "<strong>Lowbie</strong>", "characterId": "x", "level": 8, "serverId": 1313, "serverName": "Phernos"}
         ]});
         let candidates = exact_candidates(&payload, "Lowbie");
-        assert_eq!(chosen(&candidates, plan(&candidates, 1313, false, 40)).level, 8);
+        assert_eq!(chosen(&candidates, plan(&candidates, 1313, false, 40, None)).level, 8);
     }
 
     fn candidate(name: &str, level: u32, server: u16, server_name: &str) -> Candidate {
@@ -669,7 +675,7 @@ mod tests {
     #[test]
     fn one_match_anywhere_is_the_answer_even_with_no_class() {
         let only = vec![candidate("7rameee", 45, 2321, "Agnita")];
-        assert_eq!(plan(&only, 1313, false, 0), Plan::Use(0));
+        assert_eq!(plan(&only, 1313, false, 0, None), Plan::Use(0));
     }
 
     #[test]
@@ -678,7 +684,7 @@ mod tests {
             candidate("Merum", 12, 1310, "Nania"),
             candidate("Merum", 45, 2313, "Munin"),
         ];
-        assert_eq!(plan(&names, 1313, false, 0), Plan::Use(1));
+        assert_eq!(plan(&names, 1313, false, 0, None), Plan::Use(1));
     }
 
     #[test]
@@ -687,7 +693,7 @@ mod tests {
             candidate("Kiria", 45, 2312, "Ulgorn"),
             candidate("Kiria", 41, 1313, "Phernos"),
         ];
-        assert_eq!(plan(&names, 1313, false, 0), Plan::Use(1));
+        assert_eq!(plan(&names, 1313, false, 0, None), Plan::Use(1));
     }
 
     fn search_result(name: &str, level: u32, server: u16, server_name: &str) -> serde_json::Value {
@@ -763,6 +769,26 @@ mod tests {
     }
 
     #[test]
+    fn a_learned_partner_outranks_the_table() {
+        // Phernos is paired with Munin in the server list, but NC can move the Abyss
+        // pairing, and the card counts who actually turns up.
+        let names = vec![
+            candidate("Aurore", 45, 2313, "Munin"),
+            candidate("Aurore", 45, 2305, "Marchutan"),
+        ];
+        assert_eq!(
+            plan(&names, 1313, false, 40, Some(2305)),
+            Plan::Use(1),
+            "the server opponents are actually arriving from"
+        );
+        assert_eq!(
+            plan(&names, 1313, false, 40, None),
+            Plan::Use(0),
+            "with nothing learned, the server list's pairing"
+        );
+    }
+
+    #[test]
     fn the_official_list_pairs_phernos_with_munin() {
         assert_eq!(paired_server(1313), Some(2313), "Phernos with Munin");
         assert_eq!(paired_server(2313), Some(1313), "and back again");
@@ -787,7 +813,7 @@ mod tests {
             candidate("BeTeLGeuSe", 45, 2313, "Munin"),
             candidate("BeTeLGeuSe", 45, 2304, "Lumiel"),
         ];
-        assert_eq!(plan(&names, 1313, false, 40), Plan::Use(1), "Munin, the Cleric");
+        assert_eq!(plan(&names, 1313, false, 40, None), Plan::Use(1), "Munin, the Cleric");
     }
 
     #[test]
@@ -802,9 +828,9 @@ mod tests {
             candidate("Betelgeuse", 45, 2310, "Hadala"),
             candidate("Betelgeuse", 45, 2301, "Israphel"),
         ];
-        assert_eq!(plan(&names, 1313, false, 40), Plan::GiveUp, "five, so no guess");
+        assert_eq!(plan(&names, 1313, false, 40, None), Plan::GiveUp, "five, so no guess");
         assert_eq!(
-            plan(&names, 1313, true, 40),
+            plan(&names, 1313, true, 40, None),
             Plan::ByClass(vec![1, 2, 3, 4, 5])
         );
     }
@@ -812,7 +838,7 @@ mod tests {
     #[test]
     fn a_genuinely_low_level_player_still_resolves() {
         let names = vec![candidate("Betelgeuse", 11, 1313, "Phernos")];
-        assert_eq!(plan(&names, 1313, false, 40), Plan::Use(0));
+        assert_eq!(plan(&names, 1313, false, 40, None), Plan::Use(0));
     }
 
     #[test]
@@ -821,7 +847,7 @@ mod tests {
             candidate("Kar", 45, 2312, "Ulgorn"),
             candidate("Kar", 45, 2302, "Zikel"),
         ];
-        assert_eq!(plan(&names, 1313, false, 0), Plan::GiveUp);
-        assert_eq!(plan(&names, 1313, true, 0), Plan::ByClass(vec![0, 1]));
+        assert_eq!(plan(&names, 1313, false, 0, None), Plan::GiveUp);
+        assert_eq!(plan(&names, 1313, true, 0, None), Plan::ByClass(vec![0, 1]));
     }
 }

@@ -90,6 +90,7 @@ impl ScoreService {
         floor: Option<u32>,
         arena: bool,
         known_server: Option<u16>,
+        partner: Option<u16>,
     ) -> ScoreReply {
         let started = std::time::Instant::now();
         let stated = known_server.and_then(server_name_for_id);
@@ -116,7 +117,7 @@ impl ScoreService {
             return ScoreReply::missing("not_found");
         };
         let Some(score) = self
-            .resolve(name, id, class, floor.unwrap_or(0), arena, stated.is_some(), started, &candidates)
+            .resolve(name, id, class, floor.unwrap_or(0), arena, stated.is_some(), partner, started, &candidates)
             .await
         else {
             return ScoreReply::missing("ambiguous");
@@ -168,6 +169,7 @@ impl ScoreService {
         floor: u32,
         arena: bool,
         server_stated: bool,
+        partner: Option<u16>,
         started: std::time::Instant,
         candidates: &[Candidate],
     ) -> Option<GearScore> {
@@ -246,7 +248,7 @@ impl ScoreService {
             .cloned()
             .collect();
 
-        match plan(&rest, local, wanted_class.is_some(), floor) {
+        match plan(&rest, local, wanted_class.is_some(), floor, partner) {
             Plan::Use(index) => {
                 let candidate = &rest[index];
                 tracing::debug!(
@@ -429,7 +431,7 @@ mod tests {
     fn unknown_server_short_circuits_before_any_request() {
         // No client call can happen here: server_id returns None first.
         let mut service = ScoreService::new(&scratch_dir());
-        let result = tauri::async_runtime::block_on(service.lookup("Sins", "Nowhere", None, None, false, None));
+        let result = tauri::async_runtime::block_on(service.lookup("Sins", "Nowhere", None, None, false, None, None));
         assert!(result.score.is_none());
         assert_eq!(result.reason, "no_server", "an unknown server is not an ambiguity");
     }
@@ -447,7 +449,7 @@ mod tests {
     fn the_betelgeuse_who_killed_was_the_cleric_on_the_paired_server() {
         let mut service = ScoreService::new(&scratch_dir());
         let reply =
-            tauri::async_runtime::block_on(service.lookup("BeTeLGeuSe", "Phernos", None, Some(40), true, None));
+            tauri::async_runtime::block_on(service.lookup("BeTeLGeuSe", "Phernos", None, Some(40), true, None, None));
         println!("floor 40: {:?}", reply);
         let score = reply.score.expect("the Cleric on Munin");
         assert_eq!(score.server, "Munin");
@@ -465,7 +467,7 @@ mod tests {
     fn leu_resolves_to_the_geared_one_on_ludra() {
         let mut service = ScoreService::new(&scratch_dir());
         let reply =
-            tauri::async_runtime::block_on(service.lookup("Leu", "Phernos", None, Some(40), true, None));
+            tauri::async_runtime::block_on(service.lookup("Leu", "Phernos", None, Some(40), true, None, None));
         println!("leu: {:?}", reply);
         let score = reply.score.expect("the Cleric on Ludra");
         assert_eq!(score.server, "Ludra");
@@ -487,6 +489,7 @@ mod tests {
             None,
             false,
             Some(2311),
+            None,
         ));
         println!("stated 2311: {:?}", reply);
         let score = reply.score.expect("the Cleric on Ludra");

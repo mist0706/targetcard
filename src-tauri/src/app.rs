@@ -461,6 +461,7 @@ async fn targetcard_score(
     floor: Option<u32>,
     arena: Option<bool>,
     known_server: Option<u16>,
+    partner: Option<u16>,
 ) -> Result<crate::targetcard::score::ScoreReply, String> {
     let state = app.state::<crate::targetcard::score_service::ScoreServiceState>();
     let mut service = state.0.lock().await;
@@ -472,6 +473,7 @@ async fn targetcard_score(
             floor,
             arena.unwrap_or(false),
             known_server,
+            partner,
         )
         .await)
 }

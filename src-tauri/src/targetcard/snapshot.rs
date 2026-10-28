@@ -36,6 +36,8 @@ pub struct TargetSnapshot {
     pub in_abyss: bool,
     /// Whether the player is in the arena right now.
     pub in_arena: bool,
+    /// The server Abyss opponents are arriving from, learned from their records.
+    pub abyss_partner: Option<u16>,
     /// The local character's name, so the page can learn its faction.
     pub local_name: Option<String>,
     /// The local player's server, when the game has told us its id and we know
@@ -161,6 +163,7 @@ pub fn snapshot(storage: &DataStorage) -> TargetSnapshot {
         map_id: storage.current_map_id(),
         in_abyss: storage.in_abyss(),
         in_arena: storage.in_arena(),
+        abyss_partner: storage.abyss_partner(),
         local_name: storage.local_character_name(),
         server_name,
     }
