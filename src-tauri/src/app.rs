@@ -2331,7 +2331,9 @@ fn restore_window_geometry(app: &tauri::AppHandle, window: &tauri::WebviewWindow
     // Settings is a fixed list of options: it reopens where it was left, at its
     // own size. A remembered size only ever made it sprawl (see the inner-size
     // note where geometry is saved), and it can still be resized while open.
-    if label == "settings" {
+    // The target card is the same: its size is part of its design, only its place
+    // is the user's to choose.
+    if label == "settings" || label == "targetcard" {
         return true;
     }
     if let (Some(w), Some(h)) = (get("w"), get("h")) {
@@ -3462,6 +3464,17 @@ pub fn run() {
                     &app_data_dir,
                 )),
             ));
+
+            // The target card opens where it was left. It is in TOOL_WINDOWS, so
+            // its position has always been saved on every move; nothing read it
+            // back, and the config's fixed spot at the top left was what a
+            // restart produced (2026-10-28). Settings is managed by now, so this
+            // is the first moment `restore_window_geometry` can answer.
+            if let Some(card) = app.get_webview_window("targetcard") {
+                if restore_window_geometry(app.handle(), &card, "targetcard") {
+                    tracing::debug!("targetcard window: reopened where it was left");
+                }
+            }
 
             // Optional: push the debug log to a collector. Off unless
             // diagnostics.json was written by the build script.
