@@ -47,6 +47,7 @@
   let inAbyss = false;
   let inArena = false;
   let abyssPartner = null;
+  let ownServer = null;
   let pollTimer = null;
   let selfRace = null;
   let selfLevel = null;
@@ -134,11 +135,21 @@
       const key = player.name.toLowerCase();
       const score = scores.get(key) || null;
 
-      // Abyss: keep hostiles, drop our own side. A row whose faction is not known
-      // yet stays visible rather than blinking out and back; it disappears as soon
-      // as the answer says it was a teammate.
+      // Abyss: keep hostiles, drop our own side. Where the game stated a server,
+      // that settles it: anyone not on our own server is an opponent. The faction
+      // from the web lookup is only the fallback, because a resolved namesake can be
+      // somebody else entirely. A row with neither stays visible.
+      const stated = player.server_id ?? null;
       const race = score?.race ?? null;
-      if (inAbyss && selfRace != null && race != null && race === selfRace) {
+      let friendly = false;
+      if (inAbyss) {
+        if (stated != null && ownServer != null) {
+          friendly = stated === ownServer;
+        } else if (selfRace != null && race != null) {
+          friendly = race === selfRace;
+        }
+      }
+      if (friendly) {
         seen.add(player.entity_id);
         return;
       }
@@ -334,6 +345,7 @@
       inAbyss = !!snapshot?.in_abyss;
       inArena = !!snapshot?.in_arena;
       abyssPartner = snapshot?.abyss_partner ?? null;
+      ownServer = snapshot?.local_server_id ?? null;
       render();
       askSelf(snapshot?.local_name, snapshot?.server_name);
       // The Abyss key: lit red while the game says you are there, quiet otherwise.

@@ -40,6 +40,9 @@ pub struct TargetSnapshot {
     pub abyss_partner: Option<u16>,
     /// The local character's name, so the page can learn its faction.
     pub local_name: Option<String>,
+    /// The local character's server id, so the Abyss filter can tell a teammate
+    /// from an opponent by where the game says they are, not by a namesake's faction.
+    pub local_server_id: Option<u16>,
     /// The local player's server, when the game has told us its id and we know
     /// the name for it. `None` lets the page fall back to its configured server.
     pub server_name: Option<String>,
@@ -177,6 +180,7 @@ pub fn snapshot(storage: &DataStorage) -> TargetSnapshot {
         in_arena: storage.in_arena(),
         abyss_partner: storage.abyss_partner(),
         local_name: storage.local_character_name(),
+        local_server_id: Some(storage.own_server()).filter(|id| *id != 0),
         server_name,
     }
 }
