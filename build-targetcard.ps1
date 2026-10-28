@@ -39,6 +39,10 @@
 .PARAMETER BuildOnly
     Build without checking or installing anything.
 
+.PARAMETER NoLaunch
+    Install but leave the app stopped. Without this it is started again once the new
+    build is on disk, which is what an upgrade usually means.
+
 .PARAMETER Rebuild
     Compile even when this exact commit is already built here. The default skips
     the compile when nothing changed, which is what makes re-running cheap.
@@ -73,6 +77,7 @@ param(
     [switch]$Force,
     [switch]$Rebuild,
     [switch]$NoInstall,
+    [switch]$NoLaunch,
     [switch]$Uninstall,
     [string]$CollectorUrl = "http://10.7.1.235:8791",
     [string]$CollectorToken
@@ -80,7 +85,7 @@ param(
 
 # Bumped whenever this script changes, and printed, so a stale copy in Downloads
 # or %TEMP% says so instead of failing on a parameter it has never heard of.
-$ScriptStamp = "2026-10-25T16:20Z"
+$ScriptStamp = "2026-10-28T18:55Z"
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"      # speeds up Invoke-WebRequest a lot
@@ -333,6 +338,56 @@ function Uninstall-Targetcard {
     else { Write-Warn2 ("uninstall exit code " + $proc.ExitCode + "; log " + $log) }
 }
 
+function Get-InstalledExe {
+    $roots = @()
+    $app = Get-InstalledTargetcard
+    if ($app -and $app.InstallLocation) { $roots += $app.InstallLocation }
+    $roots += (Join-Path $env:ProgramFiles "targetcard")
+    if (${env:ProgramFiles(x86)}) { $roots += (Join-Path ${env:ProgramFiles(x86)} "targetcard") }
+    foreach ($root in $roots) {
+        if (-not $root -or -not (Test-Path $root)) { continue }
+        $exe = Get-ChildItem $root -Filter *.exe -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notlike "*record*" } |
+            Sort-Object Name |
+            Select-Object -First 1
+        if ($exe) { return $exe.FullName }
+    }
+    return $null
+}
+
+function Start-Targetcard([switch]$Skip) {
+    # Installing over a running app means stopping it, and leaving the machine with
+    # nothing running is not what "upgrade" should mean.
+    if ($Skip) {
+        Write-Host "   -NoLaunch given; not starting it." -ForegroundColor Yellow
+        return
+    }
+    $exe = Get-InstalledExe
+    if (-not $exe) {
+        Write-Warn2 "installed, but no exe was found to start; use the Start menu"
+        return
+    }
+    $already = Get-Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -like "*\targetcard\*" } |
+        Select-Object -First 1
+    if ($already) {
+        Write-Ok ("already running (" + $already.ProcessName + " " + $already.Id + ")")
+        return
+    }
+    try {
+        Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) | Out-Null
+    } catch {
+        Write-Warn2 ("could not start it: " + $_.Exception.Message)
+        return
+    }
+    Start-Sleep -Milliseconds 1500
+    $now = Get-Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -like "*\targetcard\*" } |
+        Select-Object -First 1
+    if ($now) { Write-Ok ("started " + (Split-Path $exe -Leaf) + " (" + $now.Id + ")") }
+    else { Write-Warn2 "asked it to start but no process appeared; run it from the Start menu" }
+}
+
 function Install-Msi([string]$Msi) {
     Write-Step "Install"
     $installed = Get-InstalledTargetcard
@@ -548,8 +603,10 @@ if ($NoInstall) {
     Write-Host "`n   -NoInstall given; the MSI is left on disk." -ForegroundColor Yellow
 } else {
     Install-Msi $msi.FullName
-}
-
-if (-not (Set-DiagnosticsCollector)) {
-    Write-Host "   diagnostics: no -CollectorToken given, the app uploads nothing." -ForegroundColor Yellow
+    if (-not (Set-DiagnosticsCollector)) {
+        Write-Host "   diagnostics: no -CollectorToken given, the app uploads nothing." -ForegroundColor Yellow
+    }
+    # Only when there is something new on disk, and only after the diagnostics file
+    # the app reads at startup has been written.
+    Start-Targetcard -Skip:$NoLaunch
 }
