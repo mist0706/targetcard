@@ -549,6 +549,12 @@ impl StreamProcessor {
         }
 
         if flag_info.value == 3 {
+            // Your own death is the moment worth having in the log: every "who killed
+            // me, and did the card show them" question needs a timestamp to look
+            // around, and this is it.
+            if self.data_storage.local_player_id() == Some(entity_id as i64) {
+                tracing::info!("local player died, entity {entity_id}");
+            }
             tracing::trace!("Death event: entity {} killed in combat", entity_id);
             self.data_storage.mark_entity_dead(entity_id);
         }
