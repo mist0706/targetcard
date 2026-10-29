@@ -96,6 +96,11 @@ path = "tools/targetcard_record.rs"
 required-features = ["desktop"]
 
 [[bin]]
+name = "a2t-dump"
+path = "tools/a2t_dump.rs"
+required-features = ["desktop"]
+
+[[bin]]
 name = "a2t-roster"
 path = "tools/a2t_roster.rs"
 required-features = ["desktop"]
