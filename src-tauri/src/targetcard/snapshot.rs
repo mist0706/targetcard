@@ -38,6 +38,11 @@ pub struct TargetSnapshot {
     pub in_arena: bool,
     /// The server Abyss opponents are arriving from, learned from their records.
     pub abyss_partner: Option<u16>,
+    /// Player kills this session.
+    pub kills: u32,
+    /// Abyss points gained or lost this session, once the game is read for it.
+    /// `None` means the number is not known, which is different from zero.
+    pub ap_delta: Option<i64>,
     /// The local character's name, so the page can learn its faction.
     pub local_name: Option<String>,
     /// The local character's server id, so the Abyss filter can tell a teammate
@@ -179,6 +184,8 @@ pub fn snapshot(storage: &DataStorage) -> TargetSnapshot {
         in_abyss: storage.in_abyss(),
         in_arena: storage.in_arena(),
         abyss_partner: storage.abyss_partner(),
+        kills: storage.session_kills(),
+        ap_delta: None,
         local_name: storage.local_character_name(),
         local_server_id: Some(storage.own_server()).filter(|id| *id != 0),
         server_name,

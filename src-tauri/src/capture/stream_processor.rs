@@ -577,7 +577,8 @@ impl StreamProcessor {
                     ),
                     None => tracing::info!("you died: no attacker on record"),
                 }
-            } else if attacker == me && self.data_storage.name_of(entity_id as i32).is_some() {
+            } else if attacker == me && self.data_storage.is_known_player(entity_id as i32) {
+                self.data_storage.note_kill();
                 tracing::info!("you killed {} [entity {entity_id}]", describe(entity_id as i32));
             }
             tracing::trace!("Death event: entity {} killed in combat", entity_id);

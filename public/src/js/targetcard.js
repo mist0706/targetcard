@@ -360,6 +360,26 @@
       const abyss = document.getElementById("tc-abyss");
       if (abyss) abyss.classList.toggle("on", inAbyss);
 
+      const kills = document.getElementById("tc-kills");
+      if (kills) {
+        const n = snapshot?.kills ?? 0;
+        kills.textContent = `kills ${n}`;
+        kills.classList.toggle("meter", n > 0);
+      }
+
+      // Abyss points: shown only when the game has been read for them, because a zero
+      // and "not known" are different things and one of them is a lie.
+      const ap = document.getElementById("tc-ap");
+      if (ap) {
+        const delta = snapshot?.ap_delta ?? null;
+        ap.hidden = delta === null;
+        if (delta !== null) {
+          ap.textContent = `ap ${delta >= 0 ? "+" : ""}${delta}`;
+          ap.classList.toggle("up", delta >= 0);
+          ap.classList.toggle("down", delta < 0);
+        }
+      }
+
       for (const [index, player] of lastRecent.entries()) {
         if (player.combat_power == null) enqueue(player, index);
       }

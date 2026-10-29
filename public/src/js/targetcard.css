@@ -102,6 +102,29 @@ body {
   transition: color 140ms ease, background 140ms ease, border-color 140ms ease;
 }
 
+/* Kills and abyss points sit beside the abyss light: quiet numbers, not statuses. */
+.pill.meter {
+  color: #c8d0de;
+  border-color: rgba(255, 255, 255, 0.10);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.pill.up {
+  color: #8fe0a6;
+  border-color: rgba(96, 200, 130, 0.45);
+  background: rgba(46, 150, 86, 0.20);
+}
+
+.pill.down {
+  color: #ffb1a6;
+  border-color: rgba(255, 110, 96, 0.45);
+  background: rgba(170, 58, 46, 0.22);
+}
+
+.pill[hidden] {
+  display: none;
+}
+
 .pill.on {
   border-color: rgba(255, 96, 96, 0.55);
   background: rgba(200, 52, 52, 0.24);

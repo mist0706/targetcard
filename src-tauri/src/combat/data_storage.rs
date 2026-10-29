@@ -773,6 +773,8 @@ struct Inner {
     /// Who last dealt damage to a target, and when. A death packet names the victim and
     /// nobody else, so this is the only way to say who killed whom.
     last_damage_from: HashMap<i32, (i32, i64)>,
+    /// Player kills this session, counted where a death is credited to us.
+    session_kills: u32,
     /// The class and level your own self record last stated, with the name it
     /// was for, so a character switch does not carry the last one's over.
     self_profile: Option<(String, Option<JobClass>, Option<u32>)>,
@@ -883,6 +885,7 @@ impl DataStorage {
                 self_server: 0,
                 abyss_servers: HashMap::new(),
                 last_damage_from: HashMap::new(),
+                session_kills: 0,
                 self_profile: None,
                 self_gear_score: None,
                 self_combat_power: None,
@@ -1376,6 +1379,16 @@ impl DataStorage {
         if server_id == 0 || (1000..3000).contains(&server_id) {
             self.inner.write().self_server = server_id;
         }
+    }
+
+    /// Count a kill. Called where a death is credited to the local player.
+    pub fn note_kill(&self) {
+        self.inner.write().session_kills += 1;
+    }
+
+    /// Player kills since the app started.
+    pub fn session_kills(&self) -> u32 {
+        self.inner.read().session_kills
     }
 
     /// Who last hit `target`, if anyone has: `(attacker entity, when)`.
