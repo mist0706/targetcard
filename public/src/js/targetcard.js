@@ -15,7 +15,7 @@
  */
 (() => {
   const POLL_MS = 1000;
-  const MAX_LOOKUPS = 2;              // in flight at once, to stay polite
+  const MAX_LOOKUPS = 4;              // in flight at once, to stay polite
   const FALLBACK_SERVER = "Phernos";
 
   // A lookup that never settled used to block the queue for the rest of the
@@ -202,14 +202,17 @@
     return row?.class || null;
   }
 
-  function enqueue(player) {
+  function enqueue(player, priority = 0) {
     const key = player.name.toLowerCase();
     if (scores.has(key) || queued.has(key)) return;
     if ((retryAt.get(key) ?? 0) > Date.now()) return; // still cooling down
     queued.add(key);
     // The server travels with the name: the game states it in the player's own
     // record, and when it does the lookup needs nothing else.
-    queue.push({ name: player.name, serverId: player.server_id ?? null });
+    // Newest arrival first: during a rift invasion a dozen names land at once, and the
+    // one that just killed you should not be behind all of them. Priority is the row's
+    // place in the table, where 0 is the newest.
+    queue.push({ name: player.name, serverId: player.server_id ?? null, priority });
     pump();
   }
 
@@ -218,7 +221,12 @@
     pumping = true;
     try {
       while (inFlight < MAX_LOOKUPS && queue.length) {
-        const item = queue.shift();
+        // Ask about the newest arrival next, not the oldest one waiting.
+        let best = 0;
+        for (let i = 1; i < queue.length; i += 1) {
+          if (queue[i].priority < queue[best].priority) best = i;
+        }
+        const item = queue.splice(best, 1)[0];
         const name = item.name;
         const key = name.toLowerCase();
         inFlight += 1;
@@ -352,8 +360,8 @@
       const abyss = document.getElementById("tc-abyss");
       if (abyss) abyss.classList.toggle("on", inAbyss);
 
-      for (const player of lastRecent) {
-        if (player.combat_power == null) enqueue(player);
+      for (const [index, player] of lastRecent.entries()) {
+        if (player.combat_power == null) enqueue(player, index);
       }
     } catch (error) {
       console.error("targetcard: snapshot failed", error);
