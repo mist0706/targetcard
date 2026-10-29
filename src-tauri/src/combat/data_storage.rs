@@ -770,6 +770,9 @@ struct Inner {
     /// and how often. The pairing is not a constant: NC switched Phernos's Abyss
     /// partner once already, so this is read off the traffic rather than assumed.
     abyss_servers: HashMap<u16, u32>,
+    /// Who last dealt damage to a target, and when. A death packet names the victim and
+    /// nobody else, so this is the only way to say who killed whom.
+    last_damage_from: HashMap<i32, (i32, i64)>,
     /// The class and level your own self record last stated, with the name it
     /// was for, so a character switch does not carry the last one's over.
     self_profile: Option<(String, Option<JobClass>, Option<u32>)>,
@@ -879,6 +882,7 @@ impl DataStorage {
                 player_servers: HashMap::new(),
                 self_server: 0,
                 abyss_servers: HashMap::new(),
+                last_damage_from: HashMap::new(),
                 self_profile: None,
                 self_gear_score: None,
                 self_combat_power: None,
@@ -1374,6 +1378,16 @@ impl DataStorage {
         }
     }
 
+    /// Who last hit `target`, if anyone has: `(attacker entity, when)`.
+    pub fn last_attacker(&self, target: i32) -> Option<(i32, i64)> {
+        self.inner.read().last_damage_from.get(&target).copied()
+    }
+
+    /// A player's name by entity id, when the game has named them.
+    pub fn name_of(&self, id: i32) -> Option<String> {
+        self.inner.read().nickname_storage.get(&id).cloned()
+    }
+
     /// Your class and level, as your own self record states them.
     ///
     /// A record whose level did not read (a partial copy, the scan having met
@@ -1580,6 +1594,12 @@ impl DataStorage {
                 self.damage_generation.fetch_add(1, Ordering::Relaxed);
             }
             return;
+        }
+
+        // Remember the hitter before anything else can discard this packet: a death
+        // names only its victim, and this is the last chance to know who did it.
+        if actor_id != target_id && inner.last_damage_from.len() < 20_000 {
+            inner.last_damage_from.insert(target_id, (actor_id, now_ms()));
         }
 
         // A tick from a spirit that has left the world: the game does not
@@ -2206,6 +2226,7 @@ impl DataStorage {
         self.entity_seen.lock().clear();
         self.entity_first_seen.lock().clear();
         let mut inner = self.inner.write();
+        inner.last_damage_from.clear();
         // A load hands out new entity ids: counts of the old ones would name
         // an entity that is gone.
         inner.loot_identity.scope_counts.clear();
@@ -3651,6 +3672,28 @@ mod tests {
         quiet.note_self_server(1313);
         quiet.note_player_server("Someone", 2311);
         assert_eq!(quiet.abyss_partner(), None, "not in the Abyss, so not learned");
+    }
+
+    #[test]
+    fn a_death_can_be_credited_to_whoever_hit_last() {
+        let s = DataStorage::new();
+        s.append_nickname_authoritative(900, "Samet");
+        s.append_nickname_authoritative(901, "Sins");
+        s.note_self_server(1313);
+        s.note_player_server("Samet", 2312);
+        s.note_player_server("Sins", 1313);
+        assert_eq!(s.last_attacker(900), None, "nobody has hit them yet");
+
+        let mut hit = ParsedDamagePacket::new();
+        hit.set_actor_id(901);
+        hit.set_target_id(900);
+        hit.set_skill_code(13050000);
+        hit.set_damage(5_000);
+        s.append_damage(hit);
+        let (attacker, _) = s.last_attacker(900).expect("the last hit");
+        assert_eq!(attacker, 901, "you were the last to hit them");
+        assert_eq!(s.name_of(900).as_deref(), Some("Samet"));
+        assert_eq!(s.player_server("Samet"), 2312, "and their server is known");
     }
 
     #[test]

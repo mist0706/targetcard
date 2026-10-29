@@ -549,11 +549,36 @@ impl StreamProcessor {
         }
 
         if flag_info.value == 3 {
-            // Your own death is the moment worth having in the log: every "who killed
-            // me, and did the card show them" question needs a timestamp to look
-            // around, and this is it.
-            if self.data_storage.local_player_id() == Some(entity_id as i64) {
-                tracing::info!("local player died, entity {entity_id}");
+            // A death names its victim and nobody else, so the killer comes from the
+            // last hit recorded on them. That makes both halves of the question
+            // answerable afterwards: who killed you, and whether you killed anyone.
+            // Ids are cleared on a zone load, so a hit recorded against this entity is
+            // from this zone and this fight.
+            let attacker = self
+                .data_storage
+                .last_attacker(entity_id as i32)
+                .map(|(id, _)| id);
+            let me = self.data_storage.local_player_id().map(|id| id as i32);
+            let describe = |id: i32| {
+                let name = self.data_storage.name_of(id).unwrap_or_else(|| format!("#{id}"));
+                match self.data_storage.player_server(&name) {
+                    0 => name,
+                    server => match crate::targetcard::score::server_short_name(server) {
+                        Some(tag) => format!("{name} ({tag})"),
+                        None => name,
+                    },
+                }
+            };
+            if me == Some(entity_id as i32) {
+                match attacker {
+                    Some(killer) => tracing::info!(
+                        "you died: killed by {} [entity {killer}]",
+                        describe(killer)
+                    ),
+                    None => tracing::info!("you died: no attacker on record"),
+                }
+            } else if attacker == me && self.data_storage.name_of(entity_id as i32).is_some() {
+                tracing::info!("you killed {} [entity {entity_id}]", describe(entity_id as i32));
             }
             tracing::trace!("Death event: entity {} killed in combat", entity_id);
             self.data_storage.mark_entity_dead(entity_id);
