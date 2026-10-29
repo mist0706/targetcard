@@ -324,7 +324,10 @@ pub fn plan(
     {
         return Plan::Use(index);
     }
-    if let Some(partner) = partner.or_else(|| paired_server(local)) {
+    // Only a partner learned from the traffic counts here. The published pairing is a
+    // launch table that NC said it would rework, and rifts can put you against servers
+    // outside it, so the table is not evidence about who this name belongs to.
+    if let Some(partner) = partner {
         if let Some(index) = plausible
             .iter()
             .copied()
@@ -773,23 +776,16 @@ mod tests {
     }
 
     #[test]
-    fn a_learned_partner_outranks_the_table() {
-        // Phernos is paired with Munin in the server list, but NC can move the Abyss
-        // pairing, and the card counts who actually turns up.
+    fn only_a_learned_partner_decides() {
         let names = vec![
             candidate("Aurore", 45, 2313, "Munin"),
             candidate("Aurore", 45, 2305, "Marchutan"),
         ];
-        assert_eq!(
-            plan(&names, 1313, false, 40, Some(2305)),
-            Plan::Use(1),
-            "the server opponents are actually arriving from"
-        );
-        assert_eq!(
-            plan(&names, 1313, false, 40, None),
-            Plan::Use(0),
-            "with nothing learned, the server list's pairing"
-        );
+        // Marchutan, because that is who is actually turning up.
+        assert_eq!(plan(&names, 1313, false, 40, Some(2305)), Plan::Use(1));
+        // With nothing learned, the launch table is not evidence: two level 45
+        // Asmodians and no way to tell them apart is a dash, not a guess at Munin.
+        assert_eq!(plan(&names, 1313, false, 40, None), Plan::GiveUp);
     }
 
     #[test]
@@ -811,13 +807,16 @@ mod tests {
     }
 
     #[test]
-    fn the_paired_server_answers_when_our_own_only_has_an_alt() {
+    fn the_learned_partner_answers_when_our_own_only_has_an_alt() {
         let names = vec![
             candidate("BeTeLGeuSe", 11, 1313, "Phernos"),
             candidate("BeTeLGeuSe", 45, 2313, "Munin"),
             candidate("BeTeLGeuSe", 45, 2304, "Lumiel"),
         ];
-        assert_eq!(plan(&names, 1313, false, 40, None), Plan::Use(1), "Munin, the Cleric");
+        // Munin, because that is the server the Abyss kept throwing at us. Without
+        // that, two level 45 Asmodians and our own alt is a dash.
+        assert_eq!(plan(&names, 1313, false, 40, Some(2313)), Plan::Use(1));
+        assert_eq!(plan(&names, 1313, false, 40, None), Plan::GiveUp);
     }
 
     #[test]

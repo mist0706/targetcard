@@ -234,7 +234,7 @@
               floor: levelFloor(),
               arena: inArena,
               knownServer: item.serverId,
-              partner: abyssPartner,
+              partner: inAbyss ? abyssPartner : null,
             }),
             LOOKUP_TIMEOUT_MS,
           );
