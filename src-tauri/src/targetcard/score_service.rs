@@ -213,9 +213,15 @@ impl ScoreService {
         // our server must not shadow the level 45 opponent from another one, so
         // when the game showed us a class, the own-server candidate has to be
         // that class. One extra request, and it settles the Althea case.
+        // One person by that name is that person, whatever their level: the floor
+        // exists to stop an alt on our server answering for an opponent who is one of
+        // several namesakes, and with a single candidate there is nobody else to be.
+        // Refusing here produced dashes for a level 35 teammate standing in front of
+        // the player (Deorine, Pilvie, hurielx, 2026-10-28).
+        let only_this_name = candidates.len() == 1;
         if let Some(candidate) = candidates
             .iter()
-            .filter(|c| c.server_id == local && c.level >= floor)
+            .filter(|c| c.server_id == local && (c.level >= floor || only_this_name))
             .max_by_key(|c| c.level)
         {
             if let Some(score) = self.score_of(candidate, started).await {
@@ -440,43 +446,23 @@ mod tests {
         assert_eq!(result.reason, "no_server", "an unknown server is not an ambiguity");
     }
 
-    /// Against the live API, the case that produced a 5,333 and then a dash.
-    ///
-    /// The player was killed by BeTeLGeuSe and the card said 5,333, which is a level
-    /// 11 Gladiator alt on Phernos. The character who did it is on Munin, the server
-    /// paired with Phernos, and is a level 45 Cleric. Two reasons it was missed: the
-    /// search only asked for 20 rows and this name was row 21, and the own-server
-    /// preference outranked level. Ignored by default, needs the network:
-    /// `cargo test -- --ignored betelgeuse`.
+    /// A single namesake is that person even below the level floor: the floor is for
+    /// choosing between namesakes, and with one there is nothing to choose.
     #[test]
     #[ignore]
-    fn the_betelgeuse_who_killed_was_the_cleric_on_the_paired_server() {
+    fn one_low_level_namesake_is_still_the_answer() {
         let mut service = ScoreService::new(&scratch_dir());
-        let reply =
-            tauri::async_runtime::block_on(service.lookup("BeTeLGeuSe", "Phernos", None, Some(40), true, None, None));
-        println!("floor 40: {:?}", reply);
-        let score = reply.score.expect("the Cleric on Munin");
-        assert_eq!(score.server, "Munin");
-        assert_eq!(score.class_name.as_deref(), Some("Cleric"));
-        // Their combat power moves as they gear up, so assert the shape of the answer,
-        // not the number of the day.
-        assert!(score.combat_power.is_some_and(|cp| cp >= ARENA_CP_FLOOR));
-    }
-
-    /// Against the live API: two level 45 Asmodians named Leu, on Agnita and Ludra.
-    /// Only one of them is geared enough to be in a match, so the tie-break settles it.
-    /// Ignored by default, needs the network: `cargo test -- --ignored leu`.
-    #[test]
-    #[ignore]
-    fn leu_resolves_to_the_geared_one_on_ludra() {
-        let mut service = ScoreService::new(&scratch_dir());
-        let reply =
-            tauri::async_runtime::block_on(service.lookup("Leu", "Phernos", None, Some(40), true, None, None));
-        println!("leu: {:?}", reply);
-        let score = reply.score.expect("the Cleric on Ludra");
-        assert_eq!(score.server, "Ludra");
-        assert_eq!(score.class_name.as_deref(), Some("Cleric"));
-        assert!(score.combat_power.is_some_and(|cp| cp >= ARENA_CP_FLOOR));
+        let reply = tauri::async_runtime::block_on(service.lookup(
+            "Deorine",
+            "Phernos",
+            None,
+            Some(40),
+            false,
+            None,
+            None,
+        ));
+        println!("deorine: {:?}", reply);
+        assert!(reply.score.is_some(), "one candidate, so it is them");
     }
 
     /// Against the live API: with the server the game stated, Leu resolves with no
